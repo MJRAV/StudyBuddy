@@ -1,0 +1,57 @@
+import { Routes, Route, useNavigate, useLocation } from 'react-router-dom';
+import { CommunityWall } from '@/app/components/CommunityWall';
+import { MessagesPage } from '@/app/components/MessagesPage';
+import { FindMentor } from '@/app/components/FindMentor';
+import { BuddyPage } from '@/app/components/BuddyPage';
+import { ProfilePage } from '@/app/components/ProfilePage';
+import { Home, MessageCircle, Search, Users, User } from 'lucide-react';
+
+export function MainApp() {
+  const navigate = useNavigate();
+  const location = useLocation();
+
+  const navItems = [
+    { path: '/app/community', icon: Home, label: 'Community' },
+    { path: '/app/messages', icon: MessageCircle, label: 'Messages' },
+    { path: '/app/find-mentor', icon: Search, label: 'Find Mentor' },
+    { path: '/app/buddies', icon: Users, label: 'Buddies' },
+    { path: '/app/profile', icon: User, label: 'Profile' },
+  ];
+
+  return (
+    <div className="flex h-screen flex-col bg-amber-50">
+      {/* Main Content */}
+      <div className="flex-1 overflow-y-auto pb-20">
+        <Routes>
+          <Route path="/community" element={<CommunityWall />} />
+          <Route path="/messages" element={<MessagesPage />} />
+          <Route path="/find-mentor" element={<FindMentor />} />
+          <Route path="/buddies" element={<BuddyPage />} />
+          <Route path="/profile" element={<ProfilePage />} />
+        </Routes>
+      </div>
+
+      {/* Bottom Navigation */}
+      <nav className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200">
+        <div className="flex justify-around px-1 py-2">
+          {navItems.map((item) => {
+            const Icon = item.icon;
+            const isActive = location.pathname === item.path;
+            return (
+              <button
+                key={item.path}
+                onClick={() => navigate(item.path)}
+                className={`flex flex-col items-center gap-1 px-2 py-2 transition-colors ${
+                  isActive ? 'text-green-600' : 'text-zinc-600'
+                }`}
+              >
+                <Icon className="h-5 w-5" />
+                <span className="text-xs font-semibold">{item.label}</span>
+              </button>
+            );
+          })}
+        </div>
+      </nav>
+    </div>
+  );
+}
