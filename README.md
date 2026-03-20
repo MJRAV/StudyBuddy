@@ -1,7 +1,5 @@
 
-  # StudyBuddy Prototype
-
-  This is a code bundle for StudyBuddy Prototype. The original project is available at https://www.figma.com/design/449Rv70gtzgAyHSP5nYm9P/StudyBuddy-Prototype.
+ 
 
   ## Running the code
 
