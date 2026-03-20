@@ -8,7 +8,12 @@ export function SplashScreen() {
   useEffect(() => {
     // Check if user is already logged in
     const isLoggedIn = localStorage.getItem('isLoggedIn');
-    const targetRoute = isLoggedIn === 'true' ? '/app/community' : '/login';
+    const hasSeenOnboarding = localStorage.getItem('hasSeenOnboarding');
+    
+    let targetRoute = '/login';
+    if (isLoggedIn === 'true') {
+      targetRoute = hasSeenOnboarding === 'true' ? '/app/community' : '/onboarding';
+    }
 
     // Start fade out after 2 seconds
     const fadeTimer = setTimeout(() => {

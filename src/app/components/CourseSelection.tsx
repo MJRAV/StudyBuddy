@@ -117,7 +117,7 @@ export function CourseSelection() {
     const selectedCourses = Object.keys(courseRoles);
     localStorage.setItem('selectedCourses', JSON.stringify(selectedCourses));
     
-    navigate('/app/community');
+    navigate('/onboarding');
   };
 
   const canProceed = () => {
