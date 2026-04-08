@@ -1,64 +1,131 @@
-import { useState } from 'react';
-import { Card, CardContent, CardHeader } from '@/app/components/ui/card';
+import { useEffect, useMemo, useState } from 'react';
 import { Input } from '@/app/components/ui/input';
 import { Button } from '@/app/components/ui/button';
 import { Avatar, AvatarFallback } from '@/app/components/ui/avatar';
 import { Badge } from '@/app/components/ui/badge';
-import { Send, Search } from 'lucide-react';
+import { Send, Search, ChevronLeft } from 'lucide-react';
+import { isFirebaseConfigured } from '@/app/lib/firebase';
+import {
+  sendMessage,
+  subscribeToConversations,
+  subscribeToMessages,
+  type ChatMessage,
+  type Conversation,
+} from '@/app/lib/messagesService';
+import { getCurrentUserId } from '@/app/lib/authService';
 
-const mockConversations = [
-  {
-    id: 1,
-    name: 'Sarah Johnson',
-    role: 'Mentor',
-    lastMessage: 'I can help you with that algorithm problem!',
-    time: '10m ago',
-    unread: 2,
-  },
-  {
-    id: 2,
-    name: 'Mike Chen',
-    role: 'Mentee',
-    lastMessage: 'Thanks for the study materials',
-    time: '1h ago',
-    unread: 0,
-  },
-  {
-    id: 3,
-    name: 'Emma Davis',
-    role: 'Mentor',
-    lastMessage: 'Let me know if you need more clarification',
-    time: '2d ago',
-    unread: 0,
-  },
-];
+function formatMessageTime(timestampMs: number): string {
+  if (!timestampMs) {
+    return '';
+  }
 
-const mockMessages = [
-  { id: 1, sender: 'Sarah Johnson', text: 'Hi! How can I help you today?', time: '10:30 AM', isMine: false },
-  { id: 2, sender: 'You', text: 'I\'m struggling with binary search trees', time: '10:32 AM', isMine: true },
-  { id: 3, sender: 'Sarah Johnson', text: 'I can help you with that algorithm problem!', time: '10:35 AM', isMine: false },
-];
+  return new Date(timestampMs).toLocaleTimeString([], {
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+}
 
 export function MessagesPage() {
-  const [selectedConversation, setSelectedConversation] = useState<number | null>(1);
+  const userId = getCurrentUserId();
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [selectedConversation, setSelectedConversation] = useState<string | null>(null);
+  const [isMobileChatOpen, setIsMobileChatOpen] = useState(false);
   const [newMessage, setNewMessage] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
 
-  const handleSendMessage = () => {
-    if (newMessage.trim()) {
-      // In production, send to backend
-      setNewMessage('');
+  useEffect(() => {
+    if (!isFirebaseConfigured || !userId) {
+      return;
     }
+
+    const unsubscribe = subscribeToConversations(userId, (items) => {
+      setConversations(items);
+      setSelectedConversation((current) => {
+        if (!items.length) {
+          return null;
+        }
+
+        if (current && items.some((item) => item.id === current)) {
+          return current;
+        }
+
+        return items[0].id;
+      });
+    });
+
+    return () => {
+      unsubscribe?.();
+    };
+  }, [userId]);
+
+  useEffect(() => {
+    if (!selectedConversation || !userId) {
+      setMessages([]);
+      return;
+    }
+
+    if (!isFirebaseConfigured) {
+      return;
+    }
+
+    const unsubscribe = subscribeToMessages(userId, selectedConversation, (items) => {
+      setMessages(items);
+    });
+
+    return () => {
+      unsubscribe?.();
+    };
+  }, [selectedConversation, userId]);
+
+  const handleSendMessage = async () => {
+    if (!newMessage.trim() || !selectedConversation || !userId) {
+      return;
+    }
+
+    if (!isFirebaseConfigured) {
+      return;
+    }
+
+    await sendMessage(userId, selectedConversation, {
+      text: newMessage.trim(),
+      senderId: userId,
+      senderName: localStorage.getItem('userName') || 'User',
+    });
+    setNewMessage('');
   };
 
-  const filteredConversations = mockConversations.filter((conv) =>
-    conv.name.toLowerCase().includes(searchQuery.toLowerCase())
+  const filteredConversations = useMemo(
+    () => conversations.filter((conv) => conv.name.toLowerCase().includes(searchQuery.toLowerCase())),
+    [conversations, searchQuery],
   );
+
+  const activeConversation = conversations.find((conv) => conv.id === selectedConversation);
+
+  if (!isFirebaseConfigured) {
+    return (
+      <div className="flex h-full items-center justify-center bg-amber-50 p-6 text-center text-zinc-600">
+        Supabase is not configured for this app.
+      </div>
+    );
+  }
+
+  if (!userId) {
+    return (
+      <div className="flex h-full items-center justify-center bg-amber-50 p-6 text-center text-zinc-600">
+        Please sign in to view your messages.
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-full">
       {/* Conversations List */}
-      <div className="w-full md:w-96 border-r border-gray-200 bg-white">
+      <div
+        className={`w-full border-r border-gray-200 bg-white md:w-96 ${
+          isMobileChatOpen ? 'hidden md:block' : 'block'
+        }`}
+      >
         <div className="p-4">
           <h1 className="mb-4 text-2xl font-bold">Messages</h1>
           <div className="relative">
@@ -76,14 +143,25 @@ export function MessagesPage() {
           {filteredConversations.map((conv) => (
             <button
               key={conv.id}
-              onClick={() => setSelectedConversation(conv.id)}
+              onClick={() => {
+                setSelectedConversation(conv.id);
+                setIsMobileChatOpen(true);
+              }}
               className={`w-full p-4 text-left transition-colors hover:bg-green-50 ${
                 selectedConversation === conv.id ? 'bg-green-50' : ''
               }`}
             >
               <div className="flex items-start gap-3">
                 <Avatar>
-                  <AvatarFallback>{conv.name.split(' ').map(n => n[0]).join('')}</AvatarFallback>
+                  {conv.avatarUrl ? (
+                    <img
+                      src={conv.avatarUrl}
+                      alt={conv.name}
+                      className="h-full w-full rounded-full object-cover"
+                    />
+                  ) : (
+                    <AvatarFallback>{conv.name.split(' ').map(n => n[0]).join('')}</AvatarFallback>
+                  )}
                 </Avatar>
                 <div className="flex-1 overflow-hidden">
                   <div className="flex items-center justify-between">
@@ -100,31 +178,51 @@ export function MessagesPage() {
                     )}
                   </div>
                   <p className="truncate text-sm text-zinc-600">{conv.lastMessage}</p>
-                  <p className="text-xs text-zinc-400">{conv.time}</p>
                 </div>
               </div>
             </button>
           ))}
+          {filteredConversations.length === 0 ? (
+            <div className="p-6 text-sm text-zinc-500">No conversations yet.</div>
+          ) : null}
         </div>
       </div>
 
       {/* Chat Area */}
       {selectedConversation ? (
-        <div className="hidden md:flex md:flex-1 md:flex-col">
+        <div className={`flex-1 flex-col ${isMobileChatOpen ? 'flex' : 'hidden'} md:flex`}>
           <div className="border-b border-gray-200 bg-white p-4">
             <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => setIsMobileChatOpen(false)}
+                className="mr-1 rounded-md p-1 text-zinc-600 hover:bg-zinc-100 md:hidden"
+                aria-label="Back to conversations"
+              >
+                <ChevronLeft className="h-5 w-5" />
+              </button>
               <Avatar>
-                <AvatarFallback>SJ</AvatarFallback>
+                {activeConversation?.avatarUrl ? (
+                  <img
+                    src={activeConversation.avatarUrl}
+                    alt={activeConversation.name}
+                    className="h-full w-full rounded-full object-cover"
+                  />
+                ) : (
+                  <AvatarFallback>
+                    {activeConversation ? activeConversation.name.split(' ').map((n) => n[0]).join('') : 'SB'}
+                  </AvatarFallback>
+                )}
               </Avatar>
               <div>
-                <h2 className="font-semibold">Sarah Johnson</h2>
-                <p className="text-sm text-zinc-600">Mentor • Online</p>
+                <h2 className="font-semibold">{activeConversation?.name ?? 'StudyBuddy'}</h2>
+                <p className="text-sm text-zinc-600">{activeConversation?.role ?? 'Member'} • Online</p>
               </div>
             </div>
           </div>
 
           <div className="flex-1 space-y-4 overflow-y-auto bg-amber-50 p-4">
-            {mockMessages.map((msg) => (
+            {messages.map((msg) => (
               <div
                 key={msg.id}
                 className={`flex ${msg.isMine ? 'justify-end' : 'justify-start'}`}
@@ -136,11 +234,19 @@ export function MessagesPage() {
                 >
                   <p>{msg.text}</p>
                   <p className={`mt-1 text-xs ${msg.isMine ? 'text-green-100' : 'text-zinc-500'}`}>
-                    {msg.time}
+                    {formatMessageTime(msg.createdAtMs)}
                   </p>
+                  {msg.isMine ? (
+                    <p className={`mt-1 text-xs ${msg.isMine ? 'text-green-100' : 'text-zinc-500'}`}>
+                      {msg.isRead ? 'Seen' : 'Sent'}
+                    </p>
+                  ) : null}
                 </div>
               </div>
             ))}
+            {messages.length === 0 ? (
+              <p className="text-sm text-zinc-500">No messages in this conversation yet.</p>
+            ) : null}
           </div>
 
           <div className="border-t border-gray-200 bg-white p-4">
@@ -149,7 +255,7 @@ export function MessagesPage() {
                 placeholder="Type a message..."
                 value={newMessage}
                 onChange={(e) => setNewMessage(e.target.value)}
-                onKeyPress={(e) => e.key === 'Enter' && handleSendMessage()}
+                onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
               />
               <Button onClick={handleSendMessage} disabled={!newMessage.trim()}>
                 <Send className="h-4 w-4" />

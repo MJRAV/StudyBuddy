@@ -4,15 +4,59 @@ import { MessagesPage } from '@/app/components/MessagesPage';
 import { FindMentor } from '@/app/components/FindMentor';
 import { BuddyPage } from '@/app/components/BuddyPage';
 import { ProfilePage } from '@/app/components/ProfilePage';
-import { Home, MessageCircle, Search, Users, User } from 'lucide-react';
+import { NotificationsPage } from '@/app/components/NotificationsPage';
+import { AdminPage } from './AdminPage';
+import { Bell, Home, MessageCircle, Search, Users, User } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { getCurrentUserId } from '@/app/lib/authService';
+import {
+  materializeAcceptedConnections,
+  subscribeIncomingFriendRequests,
+  type FriendRequest,
+} from '@/app/lib/socialService';
 
 export function MainApp() {
   const navigate = useNavigate();
   const location = useLocation();
+  const userId = getCurrentUserId();
+  const [incomingRequests, setIncomingRequests] = useState<FriendRequest[]>([]);
+
+  useEffect(() => {
+    if (!userId) {
+      return;
+    }
+
+    const unsubscribe = subscribeIncomingFriendRequests(userId, setIncomingRequests);
+    return () => {
+      unsubscribe?.();
+    };
+  }, [userId]);
+
+  useEffect(() => {
+    if (!userId) {
+      return;
+    }
+
+    void materializeAcceptedConnections(userId);
+
+    const interval = window.setInterval(() => {
+      void materializeAcceptedConnections(userId);
+    }, 6000);
+
+    return () => {
+      window.clearInterval(interval);
+    };
+  }, [userId]);
+
+  const pendingRequestCount = useMemo(
+    () => incomingRequests.filter((item) => item.status === 'pending').length,
+    [incomingRequests],
+  );
 
   const navItems = [
     { path: '/app/community', icon: Home, label: 'Community' },
     { path: '/app/messages', icon: MessageCircle, label: 'Messages' },
+    { path: '/app/notifications', icon: Bell, label: 'Alerts' },
     { path: '/app/find-mentor', icon: Search, label: 'Find Mentor' },
     { path: '/app/buddies', icon: Users, label: 'Buddies' },
     { path: '/app/profile', icon: User, label: 'Profile' },
@@ -25,9 +69,11 @@ export function MainApp() {
         <Routes>
           <Route path="/community" element={<CommunityWall />} />
           <Route path="/messages" element={<MessagesPage />} />
+          <Route path="/notifications" element={<NotificationsPage />} />
           <Route path="/find-mentor" element={<FindMentor />} />
           <Route path="/buddies" element={<BuddyPage />} />
           <Route path="/profile" element={<ProfilePage />} />
+          <Route path="/admin" element={<AdminPage />} />
         </Routes>
       </div>
 
@@ -45,7 +91,14 @@ export function MainApp() {
                   isActive ? 'text-green-600' : 'text-zinc-600'
                 }`}
               >
-                <Icon className="h-5 w-5" />
+                <div className="relative">
+                  <Icon className="h-5 w-5" />
+                  {item.path === '/app/notifications' && pendingRequestCount > 0 ? (
+                    <span className="absolute -right-2 -top-2 flex h-4 min-w-4 items-center justify-center rounded-full bg-green-600 px-1 text-[10px] font-bold text-white">
+                      {pendingRequestCount > 9 ? '9+' : pendingRequestCount}
+                    </span>
+                  ) : null}
+                </div>
                 <span className="text-xs font-semibold">{item.label}</span>
               </button>
             );

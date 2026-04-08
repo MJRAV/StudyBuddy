@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Card, CardContent, CardHeader } from '@/app/components/ui/card';
 import { Input } from '@/app/components/ui/input';
 import { Button } from '@/app/components/ui/button';
@@ -6,70 +7,40 @@ import { Avatar, AvatarFallback } from '@/app/components/ui/avatar';
 import { Badge } from '@/app/components/ui/badge';
 import { Search, MessageCircle, UserMinus, Calendar } from 'lucide-react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/app/components/ui/tabs';
-
-const mockBuddies = [
-  {
-    id: 1,
-    name: 'Mike Chen',
-    role: 'Mentee',
-    courses: ['Web Development', 'Database Systems'],
-    status: 'online',
-    lastActive: 'Active now',
-  },
-  {
-    id: 2,
-    name: 'Sarah Johnson',
-    role: 'Mentor',
-    courses: ['Data Structures', 'Algorithms'],
-    status: 'online',
-    lastActive: 'Active now',
-  },
-  {
-    id: 3,
-    name: 'Emma Davis',
-    role: 'Mentor',
-    courses: ['Machine Learning', 'AI'],
-    status: 'offline',
-    lastActive: '2 hours ago',
-  },
-  {
-    id: 4,
-    name: 'John Smith',
-    role: 'Mentee',
-    courses: ['Mobile Development', 'React Native'],
-    status: 'offline',
-    lastActive: '1 day ago',
-  },
-];
-
-const mockStudyGroups = [
-  {
-    id: 1,
-    name: 'Data Structures Study Group',
-    members: 8,
-    course: 'Data Structures',
-    nextSession: 'Tomorrow at 3 PM',
-  },
-  {
-    id: 2,
-    name: 'Web Dev Bootcamp',
-    members: 12,
-    course: 'Web Development',
-    nextSession: 'Friday at 5 PM',
-  },
-  {
-    id: 3,
-    name: 'ML Enthusiasts',
-    members: 6,
-    course: 'Machine Learning',
-    nextSession: 'Next Monday at 2 PM',
-  },
-];
+import { getCurrentUserId } from '@/app/lib/authService';
+import {
+  createStudyGroup,
+  removeBuddy,
+  subscribeBuddies,
+  subscribeStudyGroups,
+  type Buddy,
+  type StudyGroup,
+} from '@/app/lib/socialService';
 
 export function BuddyPage() {
+  const navigate = useNavigate();
+  const userId = getCurrentUserId();
   const [searchQuery, setSearchQuery] = useState('');
+  const [buddies, setBuddies] = useState<Buddy[]>([]);
+  const [groups, setGroups] = useState<StudyGroup[]>([]);
+  const [newGroupName, setNewGroupName] = useState('');
+  const [newGroupCourse, setNewGroupCourse] = useState('General');
 
-  const filteredBuddies = mockBuddies.filter((buddy) =>
+  useEffect(() => {
+    if (!userId) {
+      return;
+    }
+
+    const unsubBuddies = subscribeBuddies(userId, setBuddies);
+    const unsubGroups = subscribeStudyGroups(userId, setGroups);
+
+    return () => {
+      unsubBuddies?.();
+      unsubGroups?.();
+    };
+  }, [userId]);
+
+  const filteredBuddies = buddies.filter((buddy) =>
     buddy.name.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
@@ -98,16 +69,21 @@ export function BuddyPage() {
 
           <div className="space-y-3">
             {filteredBuddies.map((buddy) => (
-              <Card key={buddy.id}>
+              <Card key={buddy.uid}>
                 <CardContent className="p-4">
                   <div className="flex items-start gap-4">
                     <div className="relative">
                       <Avatar className="h-12 w-12">
-                        <AvatarFallback>{buddy.name.split(' ').map(n => n[0]).join('')}</AvatarFallback>
+                        {buddy.avatarUrl ? (
+                          <img
+                            src={buddy.avatarUrl}
+                            alt={buddy.name}
+                            className="h-full w-full rounded-full object-cover"
+                          />
+                        ) : (
+                          <AvatarFallback>{buddy.name.split(' ').map(n => n[0]).join('')}</AvatarFallback>
+                        )}
                       </Avatar>
-                      {buddy.status === 'online' && (
-                        <span className="absolute bottom-0 right-0 h-3 w-3 rounded-full border-2 border-white bg-green-500" />
-                      )}
                     </div>
                     <div className="flex-1">
                       <div className="flex items-start justify-between">
@@ -117,7 +93,7 @@ export function BuddyPage() {
                             <Badge className={buddy.role === 'Mentor' ? 'bg-green-600 text-white' : 'bg-green-100 text-green-700'}>
                               {buddy.role}
                             </Badge>
-                            <span className="text-xs text-zinc-500">{buddy.lastActive}</span>
+                            <span className="text-xs text-zinc-500">Connected</span>
                           </div>
                         </div>
                       </div>
@@ -129,11 +105,25 @@ export function BuddyPage() {
                         ))}
                       </div>
                       <div className="mt-3 flex gap-2">
-                        <Button size="sm" variant="outline">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => navigate('/app/messages')}
+                        >
                           <MessageCircle className="mr-2 h-3 w-3" />
                           Message
                         </Button>
-                        <Button size="sm" variant="outline">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => {
+                            if (!userId) {
+                              return;
+                            }
+
+                            void removeBuddy(userId, buddy.uid);
+                          }}
+                        >
                           <UserMinus className="mr-2 h-3 w-3" />
                           Remove
                         </Button>
@@ -149,7 +139,7 @@ export function BuddyPage() {
             <Card>
               <CardContent className="py-12 text-center">
                 <p className="text-zinc-500">No buddies found</p>
-                <Button className="mt-4" onClick={() => window.location.href = '/app/find-mentor'}>
+                <Button className="mt-4" onClick={() => navigate('/app/find-mentor')}>
                   Find Study Partners
                 </Button>
               </CardContent>
@@ -159,13 +149,13 @@ export function BuddyPage() {
 
         <TabsContent value="groups">
           <div className="space-y-4">
-            {mockStudyGroups.map((group) => (
+            {groups.map((group) => (
               <Card key={group.id}>
                 <CardHeader>
                   <div className="flex items-start justify-between">
                     <div>
                       <h3 className="font-semibold text-lg">{group.name}</h3>
-                      <p className="text-sm text-zinc-600">{group.members} members</p>
+                      <p className="text-sm text-zinc-600">{group.memberCount} members</p>
                     </div>
                     <Badge className="bg-green-100 text-green-700">{group.course}</Badge>
                   </div>
@@ -177,11 +167,16 @@ export function BuddyPage() {
                   </div>
                   <div className="flex gap-2">
                     <Button size="sm">View Group</Button>
-                    <Button size="sm" variant="outline">Leave Group</Button>
+                    <Button size="sm" variant="outline" disabled>Leave Group</Button>
                   </div>
                 </CardContent>
               </Card>
             ))}
+            {groups.length === 0 ? (
+              <Card>
+                <CardContent className="py-10 text-center text-zinc-500">No study groups yet.</CardContent>
+              </Card>
+            ) : null}
           </div>
 
           <Card className="mt-4">
@@ -190,7 +185,34 @@ export function BuddyPage() {
               <p className="text-sm text-zinc-600 mb-4">
                 Start a new study group and invite your buddies
               </p>
-              <Button>Create Group</Button>
+              <div className="mx-auto mb-3 flex max-w-md gap-2">
+                <Input
+                  value={newGroupName}
+                  onChange={(e) => setNewGroupName(e.target.value)}
+                  placeholder="Group name"
+                />
+                <Input
+                  value={newGroupCourse}
+                  onChange={(e) => setNewGroupCourse(e.target.value)}
+                  placeholder="Course"
+                />
+              </div>
+              <Button
+                disabled={!newGroupName.trim() || !userId}
+                onClick={() => {
+                  if (!userId || !newGroupName.trim()) {
+                    return;
+                  }
+
+                  void createStudyGroup(userId, {
+                    name: newGroupName.trim(),
+                    course: newGroupCourse.trim() || 'General',
+                  });
+                  setNewGroupName('');
+                }}
+              >
+                Create Group
+              </Button>
             </CardContent>
           </Card>
         </TabsContent>

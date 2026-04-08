@@ -82,7 +82,7 @@ interface ManageCoursesDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   currentCourses: CourseRoles;
-  onSave: (newCourses: CourseRoles) => void;
+  onSave: (newCourses: CourseRoles) => void | Promise<void>;
 }
 
 export function ManageCoursesDialog({ open, onOpenChange, currentCourses, onSave }: ManageCoursesDialogProps) {
@@ -104,9 +104,13 @@ export function ManageCoursesDialog({ open, onOpenChange, currentCourses, onSave
     });
   };
 
-  const handleSave = () => {
-    onSave(tempCourses);
-    onOpenChange(false);
+  const handleSave = async () => {
+    try {
+      await Promise.resolve(onSave(tempCourses));
+      onOpenChange(false);
+    } catch (error) {
+      console.error('Failed to save courses', error);
+    }
   };
 
   const handleCancel = () => {

@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '@/app/components/ui/button';
+import { getCurrentUserId } from '@/app/lib/authService';
+import { updateUserProfile } from '@/app/lib/userService';
 import { 
   BookOpen, 
   Users, 
@@ -97,8 +99,17 @@ export function OnboardingScreen() {
   const [touchEnd, setTouchEnd] = useState(0);
 
   useEffect(() => {
-    // Mark onboarding as seen
-    localStorage.setItem('hasSeenOnboarding', 'true');
+    const markSeen = async () => {
+      // Mark onboarding as seen
+      localStorage.setItem('hasSeenOnboarding', 'true');
+
+      const uid = getCurrentUserId();
+      if (uid) {
+        await updateUserProfile(uid, { hasSeenOnboarding: true });
+      }
+    };
+
+    void markSeen();
   }, []);
 
   const handleNext = () => {

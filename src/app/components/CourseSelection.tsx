@@ -6,6 +6,8 @@ import { RadioGroup, RadioGroupItem } from '@/app/components/ui/radio-group';
 import { Label } from '@/app/components/ui/label';
 import { Badge } from '@/app/components/ui/badge';
 import { ArrowLeft, ArrowRight, GraduationCap, Calendar, BookOpen, Users, UserPlus } from 'lucide-react';
+import { getCurrentUserId } from '@/app/lib/authService';
+import { updateUserProfile } from '@/app/lib/userService';
 
 // Course data organized by major, year, and semester
 const coursesByMajor = {
@@ -107,7 +109,7 @@ export function CourseSelection() {
     if (step > 1) setStep(step - 1);
   };
 
-  const handleComplete = () => {
+  const handleComplete = async () => {
     // Save data to localStorage
     localStorage.setItem('major', major || '');
     localStorage.setItem('yearLevel', year || '');
@@ -116,6 +118,17 @@ export function CourseSelection() {
     
     const selectedCourses = Object.keys(courseRoles);
     localStorage.setItem('selectedCourses', JSON.stringify(selectedCourses));
+
+    const uid = getCurrentUserId();
+    if (uid) {
+      await updateUserProfile(uid, {
+        major: major ?? '',
+        yearLevel: year ?? '1',
+        semester: semester?.toString() ?? '',
+        courseRoles,
+        selectedCourses,
+      });
+    }
     
     navigate('/onboarding');
   };

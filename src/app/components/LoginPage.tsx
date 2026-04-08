@@ -6,25 +6,106 @@ import { Label } from '@/app/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/app/components/ui/card';
 import { Separator } from '@/app/components/ui/separator';
 import { GraduationCap } from 'lucide-react';
+import { isFirebaseConfigured } from '@/app/lib/firebase';
+import { getCurrentUserId, loginWithEmail, loginWithGoogle } from '@/app/lib/authService';
+import { getUserProfile } from '@/app/lib/userService';
+
+function getRouteFromLocalState(): string {
+  const userRole = localStorage.getItem('userRole') || '';
+  const hasSeenOnboarding = localStorage.getItem('hasSeenOnboarding') === 'true';
+  const selectedCourses = JSON.parse(localStorage.getItem('selectedCourses') || '[]') as string[];
+  const hasCourses = selectedCourses.length > 0;
+
+  if (!userRole) {
+    return '/role';
+  }
+
+  if (!hasCourses) {
+    return '/courses';
+  }
+
+  return hasSeenOnboarding ? '/app/community' : '/onboarding';
+}
+
+async function syncProfileToLocalState(): Promise<string> {
+  const uid = getCurrentUserId();
+  if (!uid) {
+    return getRouteFromLocalState();
+  }
+
+  const profile = await getUserProfile(uid);
+  if (!profile) {
+    return '/role';
+  }
+
+  localStorage.setItem('userName', profile.name || 'User');
+  localStorage.setItem('userEmail', profile.email || '');
+  localStorage.setItem('major', profile.major || '');
+  localStorage.setItem('yearLevel', profile.yearLevel || '');
+  localStorage.setItem('semester', profile.semester || '');
+  localStorage.setItem('userRole', profile.userRole || '');
+  localStorage.setItem('courseRoles', JSON.stringify(profile.courseRoles || {}));
+  localStorage.setItem('selectedCourses', JSON.stringify(profile.selectedCourses || []));
+  localStorage.setItem('hasSeenOnboarding', profile.hasSeenOnboarding ? 'true' : 'false');
+
+  return getRouteFromLocalState();
+}
 
 export function LoginPage() {
   const navigate = useNavigate();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [error, setError] = useState('');
 
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    // Mock login - in production would validate credentials
-    localStorage.setItem('isLoggedIn', 'true');
-    localStorage.setItem('userEmail', email);
-    navigate('/courses');
+    setError('');
+    setIsSubmitting(true);
+
+    try {
+      if (isFirebaseConfigured) {
+        const user = await loginWithEmail(email, password);
+        localStorage.setItem('userEmail', user.email ?? email);
+        localStorage.setItem('userName', user.displayName ?? 'User');
+      } else {
+        localStorage.setItem('userEmail', email);
+      }
+
+      localStorage.setItem('isLoggedIn', 'true');
+      const targetRoute = await syncProfileToLocalState();
+      navigate(targetRoute);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unable to sign in.';
+      setError(message);
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
-  const handleGoogleLogin = () => {
-    // Mock Google login
-    localStorage.setItem('isLoggedIn', 'true');
-    localStorage.setItem('userEmail', 'google-user@example.com');
-    navigate('/courses');
+  const handleGoogleLogin = async () => {
+    setError('');
+    setIsSubmitting(true);
+
+    try {
+      if (isFirebaseConfigured) {
+        const user = await loginWithGoogle();
+        localStorage.setItem('userEmail', user.email ?? 'google-user@example.com');
+        localStorage.setItem('userName', user.displayName ?? 'Google User');
+      } else {
+        localStorage.setItem('userEmail', 'google-user@example.com');
+        localStorage.setItem('userName', 'Google User');
+      }
+
+      localStorage.setItem('isLoggedIn', 'true');
+      const targetRoute = await syncProfileToLocalState();
+      navigate(targetRoute);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unable to sign in with Google.';
+      setError(message);
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -39,6 +120,9 @@ export function LoginPage() {
         </CardHeader>
         <CardContent className="px-6 pb-8">
           <form onSubmit={handleLogin} className="space-y-5">
+            {error ? (
+              <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>
+            ) : null}
             <div className="space-y-2">
               <Label htmlFor="email" className="text-sm font-semibold">Email</Label>
               <Input
@@ -63,7 +147,7 @@ export function LoginPage() {
                 required
               />
             </div>
-            <Button type="submit" className="w-full h-12 text-base font-semibold">
+            <Button type="submit" className="w-full h-12 text-base font-semibold" disabled={isSubmitting}>
               Sign In
             </Button>
             
@@ -79,6 +163,7 @@ export function LoginPage() {
               variant="outline" 
               className="w-full h-12 text-base font-semibold"
               onClick={handleGoogleLogin}
+              disabled={isSubmitting}
             >
               <svg className="mr-3 h-5 w-5" viewBox="0 0 24 24">
                 <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>

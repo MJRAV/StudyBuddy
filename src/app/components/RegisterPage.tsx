@@ -6,6 +6,8 @@ import { Label } from '@/app/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/app/components/ui/card';
 import { Separator } from '@/app/components/ui/separator';
 import { GraduationCap } from 'lucide-react';
+import { isFirebaseConfigured } from '@/app/lib/firebase';
+import { loginWithGoogle, registerWithEmail } from '@/app/lib/authService';
 
 export function RegisterPage() {
   const navigate = useNavigate();
@@ -15,22 +17,62 @@ export function RegisterPage() {
     password: '',
     confirmPassword: '',
   });
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [error, setError] = useState('');
 
-  const handleRegister = (e: React.FormEvent) => {
+  const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
-    // Mock registration
-    localStorage.setItem('isLoggedIn', 'true');
-    localStorage.setItem('userName', formData.name);
-    localStorage.setItem('userEmail', formData.email);
-    navigate('/courses');
+
+    if (formData.password !== formData.confirmPassword) {
+      setError('Passwords do not match.');
+      return;
+    }
+
+    setError('');
+    setIsSubmitting(true);
+
+    try {
+      if (isFirebaseConfigured) {
+        const user = await registerWithEmail(formData.name, formData.email, formData.password);
+        localStorage.setItem('userName', user.displayName ?? formData.name);
+        localStorage.setItem('userEmail', user.email ?? formData.email);
+      } else {
+        localStorage.setItem('userName', formData.name);
+        localStorage.setItem('userEmail', formData.email);
+      }
+
+      localStorage.setItem('isLoggedIn', 'true');
+      navigate('/role');
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unable to create account.';
+      setError(message);
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
-  const handleGoogleRegister = () => {
-    // Mock Google registration
-    localStorage.setItem('isLoggedIn', 'true');
-    localStorage.setItem('userName', 'Google User');
-    localStorage.setItem('userEmail', 'google-user@example.com');
-    navigate('/courses');
+  const handleGoogleRegister = async () => {
+    setError('');
+    setIsSubmitting(true);
+
+    try {
+      if (isFirebaseConfigured) {
+        const user = await loginWithGoogle();
+        localStorage.setItem('userName', user.displayName ?? 'Google User');
+        localStorage.setItem('userEmail', user.email ?? 'google-user@example.com');
+      } else {
+        localStorage.setItem('userName', 'Google User');
+        localStorage.setItem('userEmail', 'google-user@example.com');
+      }
+
+      localStorage.setItem('isLoggedIn', 'true');
+      navigate('/role');
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unable to sign up with Google.';
+      setError(message);
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -45,6 +87,9 @@ export function RegisterPage() {
         </CardHeader>
         <CardContent className="px-6 pb-8">
           <form onSubmit={handleRegister} className="space-y-5">
+            {error ? (
+              <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>
+            ) : null}
             <div className="space-y-2">
               <Label htmlFor="name" className="text-sm font-semibold">Full Name</Label>
               <Input
@@ -93,7 +138,7 @@ export function RegisterPage() {
                 required
               />
             </div>
-            <Button type="submit" className="w-full h-12 text-base font-semibold">
+            <Button type="submit" className="w-full h-12 text-base font-semibold" disabled={isSubmitting}>
               Create Account
             </Button>
             
@@ -109,6 +154,7 @@ export function RegisterPage() {
               variant="outline" 
               className="w-full h-12 text-base font-semibold"
               onClick={handleGoogleRegister}
+              disabled={isSubmitting}
             >
               <svg className="mr-3 h-5 w-5" viewBox="0 0 24 24">
                 <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>

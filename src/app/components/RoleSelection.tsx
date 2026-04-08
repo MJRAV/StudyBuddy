@@ -3,14 +3,22 @@ import { useNavigate } from 'react-router-dom';
 import { Button } from '@/app/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/app/components/ui/card';
 import { Users, UserPlus } from 'lucide-react';
+import { getCurrentUserId } from '@/app/lib/authService';
+import { updateUserProfile } from '@/app/lib/userService';
 
 export function RoleSelection() {
   const navigate = useNavigate();
   const [selectedRole, setSelectedRole] = useState<'mentor' | 'mentee' | null>(null);
 
-  const handleContinue = () => {
+  const handleContinue = async () => {
     if (selectedRole) {
       localStorage.setItem('userRole', selectedRole);
+
+      const uid = getCurrentUserId();
+      if (uid) {
+        await updateUserProfile(uid, { userRole: selectedRole });
+      }
+
       navigate('/courses');
     }
   };

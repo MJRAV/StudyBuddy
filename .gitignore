@@ -6,6 +6,7 @@ node_modules/
 # Production
 dist/
 build/
+.parcel-cache/
 
 # Environment variables
 .env

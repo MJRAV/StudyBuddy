@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, type ChangeEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '@/app/components/ui/button';
 import { Input } from '@/app/components/ui/input';
@@ -10,6 +10,9 @@ import { Avatar, AvatarFallback } from '@/app/components/ui/avatar';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/app/components/ui/select';
 import { ArrowLeft, Edit2, Save, X, GraduationCap, BookOpen, User as UserIcon, LogOut } from 'lucide-react';
 import { ManageCoursesDialog } from '@/app/components/ManageCoursesDialog';
+import { getCurrentUserId, logoutUser } from '@/app/lib/authService';
+import { getUserProfile, updateUserProfile, uploadProfilePicture } from '@/app/lib/userService';
+import { subscribeBuddies } from '@/app/lib/socialService';
 
 interface CourseRoles {
   [course: string]: 'mentor' | 'mentee';
@@ -18,6 +21,7 @@ interface CourseRoles {
 interface UserProfile {
   name: string;
   email: string;
+  avatarUrl: string;
   bio: string;
   yearLevel: string;
   major: string;
@@ -28,9 +32,13 @@ export function ProfilePage() {
   const navigate = useNavigate();
   const [isEditing, setIsEditing] = useState(false);
   const [isManagingCourses, setIsManagingCourses] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState('');
+  const [buddyCount, setBuddyCount] = useState(0);
   const [profile, setProfile] = useState<UserProfile>({
     name: '',
     email: '',
+    avatarUrl: '',
     bio: '',
     yearLevel: '1',
     major: '',
@@ -40,46 +48,154 @@ export function ProfilePage() {
   const [editedProfile, setEditedProfile] = useState<UserProfile>(profile);
 
   useEffect(() => {
-    // Load profile data from localStorage
-    const userName = localStorage.getItem('userName') || 'User';
-    const userEmail = localStorage.getItem('userEmail') || 'user@example.com';
-    const courseRoles = JSON.parse(localStorage.getItem('courseRoles') || '{}');
-    
-    // Load saved profile data
-    const savedProfile = localStorage.getItem('userProfile');
-    if (savedProfile) {
-      const parsedProfile = JSON.parse(savedProfile);
-      setProfile(parsedProfile);
-      setEditedProfile(parsedProfile);
-    } else {
+    const loadProfile = async () => {
+      const uid = getCurrentUserId();
+      if (uid) {
+        const cloudProfile = await getUserProfile(uid);
+        if (cloudProfile) {
+          const mappedProfile = {
+            name: cloudProfile.name || 'User',
+            email: cloudProfile.email || 'user@example.com',
+            avatarUrl: cloudProfile.avatarUrl || '',
+            bio: cloudProfile.bio,
+            yearLevel: cloudProfile.yearLevel || '1',
+            major: cloudProfile.major,
+            courseRoles: cloudProfile.courseRoles,
+          };
+          setProfile(mappedProfile);
+          setEditedProfile(mappedProfile);
+          return;
+        }
+      }
+
+      const userName = localStorage.getItem('userName') || 'User';
+      const userEmail = localStorage.getItem('userEmail') || 'user@example.com';
+      const courseRoles = JSON.parse(localStorage.getItem('courseRoles') || '{}');
+      const savedProfile = localStorage.getItem('userProfile');
+
+      if (savedProfile) {
+        const parsedProfile = JSON.parse(savedProfile);
+        setProfile(parsedProfile);
+        setEditedProfile(parsedProfile);
+        return;
+      }
+
       const initialProfile = {
         name: userName,
         email: userEmail,
         bio: '',
         yearLevel: '1',
         major: '',
-        courseRoles: courseRoles,
+        avatarUrl: '',
+        courseRoles,
       };
       setProfile(initialProfile);
       setEditedProfile(initialProfile);
-    }
+    };
+
+    void loadProfile();
   }, []);
 
-  const handleSave = () => {
-    setProfile(editedProfile);
-    localStorage.setItem('userProfile', JSON.stringify(editedProfile));
-    localStorage.setItem('userName', editedProfile.name);
-    setIsEditing(false);
+  useEffect(() => {
+    const uid = getCurrentUserId();
+    if (!uid) {
+      setBuddyCount(0);
+      return;
+    }
+
+    const unsubscribe = subscribeBuddies(uid, (items) => {
+      setBuddyCount(items.length);
+    });
+
+    return () => {
+      unsubscribe?.();
+    };
+  }, []);
+
+  const handleSave = async () => {
+    setIsSaving(true);
+    setSaveError('');
+
+    try {
+      const uid = getCurrentUserId();
+      if (uid) {
+        await updateUserProfile(uid, {
+          name: editedProfile.name,
+          email: editedProfile.email,
+          bio: editedProfile.bio,
+          yearLevel: editedProfile.yearLevel,
+          major: editedProfile.major,
+        });
+      }
+
+      setProfile(editedProfile);
+      localStorage.setItem('userProfile', JSON.stringify(editedProfile));
+      localStorage.setItem('userName', editedProfile.name);
+      localStorage.setItem('userEmail', editedProfile.email);
+      localStorage.setItem('avatarUrl', editedProfile.avatarUrl);
+      setIsEditing(false);
+    } catch (error) {
+      console.error('Failed to save profile changes', error);
+      setSaveError(error instanceof Error ? error.message : 'Unable to save profile changes.');
+    } finally {
+      setIsSaving(false);
+    }
   };
 
-  const handleSaveCourses = (newCourses: CourseRoles) => {
+  const handleSaveCourses = async (newCourses: CourseRoles) => {
+    const selectedCourses = Object.keys(newCourses);
+
+    const uid = getCurrentUserId();
+    if (uid) {
+      try {
+        await updateUserProfile(uid, {
+          courseRoles: newCourses,
+          selectedCourses,
+        });
+        const updatedProfile = { ...profile, courseRoles: newCourses };
+        setProfile(updatedProfile);
+        setEditedProfile(updatedProfile);
+        localStorage.setItem('userProfile', JSON.stringify(updatedProfile));
+        localStorage.setItem('courseRoles', JSON.stringify(newCourses));
+        localStorage.setItem('selectedCourses', JSON.stringify(selectedCourses));
+      } catch (error) {
+        console.error('Failed to save course changes', error);
+        setSaveError(error instanceof Error ? error.message : 'Unable to save course changes.');
+      }
+      return;
+    }
+
     const updatedProfile = { ...profile, courseRoles: newCourses };
     setProfile(updatedProfile);
     setEditedProfile(updatedProfile);
     localStorage.setItem('userProfile', JSON.stringify(updatedProfile));
     localStorage.setItem('courseRoles', JSON.stringify(newCourses));
-    const selectedCourses = Object.keys(newCourses);
     localStorage.setItem('selectedCourses', JSON.stringify(selectedCourses));
+  };
+
+  const handleAvatarChange = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) {
+      return;
+    }
+
+    const previewUrl = URL.createObjectURL(file);
+    setEditedProfile({ ...editedProfile, avatarUrl: previewUrl });
+
+    const uid = getCurrentUserId();
+    if (!uid) {
+      return;
+    }
+
+    try {
+      const publicUrl = await uploadProfilePicture(uid, file);
+      const nextProfile = { ...editedProfile, avatarUrl: publicUrl };
+      setProfile(nextProfile);
+      setEditedProfile(nextProfile);
+      localStorage.setItem('userProfile', JSON.stringify(nextProfile));
+    } catch {
+      // Keep the preview even if upload fails; user can retry.
+    }
   };
 
   const handleCancel = () => {
@@ -96,7 +212,9 @@ export function ProfilePage() {
       .slice(0, 2);
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    await logoutUser();
+
     // Clear all user data from localStorage
     localStorage.removeItem('isLoggedIn');
     localStorage.removeItem('userName');
@@ -105,6 +223,7 @@ export function ProfilePage() {
     localStorage.removeItem('selectedCourses');
     localStorage.removeItem('courseRoles');
     localStorage.removeItem('userProfile');
+    localStorage.removeItem('avatarUrl');
     
     // Redirect to splash/login page
     navigate('/login');
@@ -146,11 +265,35 @@ export function ProfilePage() {
         <Card className="mb-6">
           <CardContent className="pt-6">
             <div className="flex flex-col items-center text-center">
-              <Avatar className="h-24 w-24 mb-4">
-                <AvatarFallback className="bg-green-100 text-green-600 text-2xl">
-                  {getInitials(isEditing ? editedProfile.name : profile.name)}
-                </AvatarFallback>
-              </Avatar>
+              <div className="relative mb-4">
+                <Avatar className="h-24 w-24">
+                  {(isEditing ? editedProfile.avatarUrl : profile.avatarUrl) ? (
+                    <img
+                      src={isEditing ? editedProfile.avatarUrl : profile.avatarUrl}
+                      alt="Profile picture"
+                      className="h-full w-full rounded-full object-cover"
+                    />
+                  ) : (
+                    <AvatarFallback className="bg-green-100 text-green-600 text-2xl">
+                      {getInitials(isEditing ? editedProfile.name : profile.name)}
+                    </AvatarFallback>
+                  )}
+                </Avatar>
+                {isEditing ? (
+                  <div className="mt-3">
+                    <Label htmlFor="avatar-upload" className="cursor-pointer text-sm font-medium text-green-600">
+                      Change Photo
+                    </Label>
+                    <Input
+                      id="avatar-upload"
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={handleAvatarChange}
+                    />
+                  </div>
+                ) : null}
+              </div>
               
               {isEditing ? (
                 <div className="w-full space-y-4">
@@ -181,6 +324,9 @@ export function ProfilePage() {
                   <h2 className="text-xl font-semibold mb-1">{profile.name}</h2>
                   <p className="text-sm text-zinc-600 mb-3">{profile.email}</p>
                   <div className="flex gap-2">
+                    <Badge variant="secondary" className="bg-blue-50 text-blue-700 border-blue-200">
+                      {buddyCount} {buddyCount === 1 ? 'Buddy' : 'Buddies'}
+                    </Badge>
                     {mentorCourses.length > 0 && (
                       <Badge variant="secondary" className="bg-green-100 text-green-700 border-green-300">
                         Mentor in {mentorCourses.length} {mentorCourses.length === 1 ? 'course' : 'courses'}
@@ -197,6 +343,14 @@ export function ProfilePage() {
             </div>
           </CardContent>
         </Card>
+
+        {saveError ? (
+          <Card className="mb-6 border-red-200 bg-red-50">
+            <CardContent className="py-4">
+              <p className="text-sm text-red-700">{saveError}</p>
+            </CardContent>
+          </Card>
+        ) : null}
 
         {/* Bio Section */}
         <Card className="mb-6">
@@ -339,6 +493,13 @@ export function ProfilePage() {
           <Card className="mb-6">
             <CardContent className="p-4">
               <Button
+                variant="outline"
+                onClick={() => navigate('/app/admin')}
+                className="mb-3 w-full"
+              >
+                Open Admin Data Viewer
+              </Button>
+              <Button
                 variant="destructive"
                 onClick={handleLogout}
                 className="w-full flex items-center justify-center gap-2 bg-red-600 hover:bg-red-700"
@@ -364,10 +525,11 @@ export function ProfilePage() {
               </Button>
               <Button
                 onClick={handleSave}
+                disabled={isSaving}
                 className="flex-1 flex items-center justify-center gap-2"
               >
                 <Save className="h-4 w-4" />
-                Save Changes
+                {isSaving ? 'Saving...' : 'Save Changes'}
               </Button>
             </div>
           </div>

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Card, CardContent, CardHeader } from '@/app/components/ui/card';
 import { Input } from '@/app/components/ui/input';
 import { Button } from '@/app/components/ui/button';
@@ -12,56 +12,81 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/app/components/ui/select';
-
-const mockMentors = [
-  {
-    id: 1,
-    name: 'Sarah Johnson',
-    courses: ['Data Structures', 'Algorithms', 'Web Development'],
-    rating: 4.8,
-    students: 23,
-    bio: 'Computer Science graduate with 5 years of teaching experience. Passionate about helping students understand complex concepts.',
-    availability: 'Available',
-  },
-  {
-    id: 2,
-    name: 'Emma Davis',
-    courses: ['Machine Learning', 'Artificial Intelligence', 'Python'],
-    rating: 4.9,
-    students: 31,
-    bio: 'ML Engineer at a Fortune 500 company. Love sharing practical insights from industry.',
-    availability: 'Available',
-  },
-  {
-    id: 3,
-    name: 'David Lee',
-    courses: ['Database Systems', 'Cloud Computing', 'DevOps'],
-    rating: 4.7,
-    students: 18,
-    bio: 'Backend developer with expertise in scalable systems. Happy to help with databases and cloud.',
-    availability: 'Busy',
-  },
-  {
-    id: 4,
-    name: 'Rachel Kim',
-    courses: ['Mobile Development', 'UI/UX Design', 'React Native'],
-    rating: 4.8,
-    students: 27,
-    bio: 'Mobile app developer and designer. Focus on creating beautiful and functional apps.',
-    availability: 'Available',
-  },
-];
+import { getCurrentUserId } from '@/app/lib/authService';
+import {
+  sendFriendRequest,
+  subscribeBuddies,
+  subscribeIncomingFriendRequests,
+  subscribeMentors,
+  subscribeOutgoingFriendRequests,
+  type MentorProfile,
+} from '@/app/lib/socialService';
 
 export function FindMentor() {
+  const userId = getCurrentUserId();
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCourse, setSelectedCourse] = useState('all');
+  const [mentors, setMentors] = useState<MentorProfile[]>([]);
+  const [requestedIds, setRequestedIds] = useState<Record<string, boolean>>({});
+  const [connectedIds, setConnectedIds] = useState<Record<string, boolean>>({});
   const selectedCourses = JSON.parse(localStorage.getItem('selectedCourses') || '[]');
 
-  const filteredMentors = mockMentors.filter((mentor) => {
+  useEffect(() => {
+    if (!userId) {
+      return;
+    }
+
+    const unsubscribe = subscribeMentors(userId, setMentors);
+    const unsubscribeBuddies = subscribeBuddies(userId, (items) => {
+      setConnectedIds((prev) => {
+        const next: Record<string, boolean> = {};
+        items.forEach((item) => {
+          next[item.uid] = true;
+        });
+
+        Object.keys(requestedIds).forEach((id) => {
+          next[id] = next[id] || requestedIds[id];
+        });
+
+        return next;
+      });
+    });
+    const unsubscribeOutgoing = subscribeOutgoingFriendRequests(userId, (items) => {
+      setConnectedIds((prev) => {
+        const next = { ...prev };
+        items
+          .filter((item) => item.status === 'pending')
+          .forEach((item) => {
+            next[item.targetId] = true;
+          });
+        return next;
+      });
+    });
+    const unsubscribeIncoming = subscribeIncomingFriendRequests(userId, (items) => {
+      setConnectedIds((prev) => {
+        const next = { ...prev };
+        items
+          .filter((item) => item.status === 'pending')
+          .forEach((item) => {
+            next[item.requesterId] = true;
+          });
+        return next;
+      });
+    });
+    return () => {
+      unsubscribe?.();
+      unsubscribeBuddies?.();
+      unsubscribeOutgoing?.();
+      unsubscribeIncoming?.();
+    };
+  }, [userId]);
+
+  const filteredMentors = mentors.filter((mentor) => {
     const matchesSearch = mentor.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
       mentor.bio.toLowerCase().includes(searchQuery.toLowerCase());
     const matchesCourse = selectedCourse === 'all' || mentor.courses.includes(selectedCourse);
-    return matchesSearch && matchesCourse;
+    const isConnected = connectedIds[mentor.uid] || requestedIds[mentor.uid];
+    return matchesSearch && matchesCourse && !isConnected;
   });
 
   return (
@@ -99,28 +124,30 @@ export function FindMentor() {
 
       <div className="space-y-4">
         {filteredMentors.map((mentor) => (
-          <Card key={mentor.id}>
+          <Card key={mentor.uid}>
             <CardHeader>
               <div className="flex items-start gap-4">
                 <Avatar className="h-16 w-16">
-                  <AvatarFallback>{mentor.name.split(' ').map(n => n[0]).join('')}</AvatarFallback>
+                  {mentor.avatarUrl ? (
+                    <img
+                      src={mentor.avatarUrl}
+                      alt={mentor.name}
+                      className="h-full w-full rounded-full object-cover"
+                    />
+                  ) : (
+                    <AvatarFallback>{mentor.name.split(' ').map(n => n[0]).join('')}</AvatarFallback>
+                  )}
                 </Avatar>
                 <div className="flex-1">
                   <div className="flex items-start justify-between">
                     <div>
                       <h3 className="font-semibold text-lg">{mentor.name}</h3>
-                      <div className="mt-1 flex items-center gap-3 text-sm text-zinc-600">
-                        <div className="flex items-center gap-1">
-                          <Star className="h-4 w-4 fill-yellow-400 text-yellow-400" />
-                          <span>{mentor.rating}</span>
-                        </div>
-                        <span>•</span>
-                        <span>{mentor.students} students</span>
+                      <div className="mt-1 flex items-center gap-2 text-sm text-zinc-600">
+                        <Star className="h-4 w-4 text-yellow-500" />
+                        <span>{mentor.major || 'Mentor'}</span>
                       </div>
                     </div>
-                    <Badge className={mentor.availability === 'Available' ? 'bg-green-500 text-white' : 'bg-zinc-200 text-zinc-700'}>
-                      {mentor.availability}
-                    </Badge>
+                    <Badge className="bg-green-500 text-white">Available</Badge>
                   </div>
                 </div>
               </div>
@@ -135,9 +162,26 @@ export function FindMentor() {
                 ))}
               </div>
               <div className="flex gap-2">
-                <Button className="flex-1">
+                <Button
+                  className="flex-1"
+                  disabled={requestedIds[mentor.uid]}
+                  onClick={() => {
+                    if (!userId) {
+                      return;
+                    }
+
+                    const requesterName = localStorage.getItem('userName') || 'User';
+                    void sendFriendRequest(userId, {
+                      targetUserId: mentor.uid,
+                      requesterName,
+                      targetName: mentor.name,
+                    }).then(() => {
+                      setRequestedIds((prev) => ({ ...prev, [mentor.uid]: true }));
+                    });
+                  }}
+                >
                   <MessageCircle className="mr-2 h-4 w-4" />
-                  Message
+                  {requestedIds[mentor.uid] ? 'Request Sent' : 'Send Request'}
                 </Button>
                 <Button variant="outline">View Profile</Button>
               </div>
