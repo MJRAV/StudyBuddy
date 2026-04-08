@@ -9,15 +9,12 @@ export function SplashScreen() {
     // Check if user is already logged in
     const isLoggedIn = localStorage.getItem('isLoggedIn');
     const hasSeenOnboarding = localStorage.getItem('hasSeenOnboarding') === 'true';
-    const userRole = localStorage.getItem('userRole') || '';
     const selectedCourses = JSON.parse(localStorage.getItem('selectedCourses') || '[]') as string[];
     const hasCourses = selectedCourses.length > 0;
     
     let targetRoute = '/login';
     if (isLoggedIn === 'true') {
-      if (!userRole) {
-        targetRoute = '/role';
-      } else if (!hasCourses) {
+      if (!hasCourses) {
         targetRoute = '/courses';
       } else {
         targetRoute = hasSeenOnboarding ? '/app/community' : '/onboarding';

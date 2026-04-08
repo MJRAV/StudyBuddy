@@ -11,6 +11,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { getCurrentUserId } from '@/app/lib/authService';
 import {
   materializeAcceptedConnections,
+  subscribeUnreadPostNotificationsCount,
   subscribeIncomingFriendRequests,
   type FriendRequest,
 } from '@/app/lib/socialService';
@@ -20,6 +21,7 @@ export function MainApp() {
   const location = useLocation();
   const userId = getCurrentUserId();
   const [incomingRequests, setIncomingRequests] = useState<FriendRequest[]>([]);
+  const [unreadPostNotifications, setUnreadPostNotifications] = useState(0);
 
   useEffect(() => {
     if (!userId) {
@@ -27,8 +29,10 @@ export function MainApp() {
     }
 
     const unsubscribe = subscribeIncomingFriendRequests(userId, setIncomingRequests);
+    const unsubscribePost = subscribeUnreadPostNotificationsCount(userId, setUnreadPostNotifications);
     return () => {
       unsubscribe?.();
+      unsubscribePost?.();
     };
   }, [userId]);
 
@@ -52,6 +56,8 @@ export function MainApp() {
     () => incomingRequests.filter((item) => item.status === 'pending').length,
     [incomingRequests],
   );
+
+  const totalNotificationCount = pendingRequestCount + unreadPostNotifications;
 
   const navItems = [
     { path: '/app/community', icon: Home, label: 'Community' },
@@ -93,9 +99,9 @@ export function MainApp() {
               >
                 <div className="relative">
                   <Icon className="h-5 w-5" />
-                  {item.path === '/app/notifications' && pendingRequestCount > 0 ? (
+                  {item.path === '/app/notifications' && totalNotificationCount > 0 ? (
                     <span className="absolute -right-2 -top-2 flex h-4 min-w-4 items-center justify-center rounded-full bg-green-600 px-1 text-[10px] font-bold text-white">
-                      {pendingRequestCount > 9 ? '9+' : pendingRequestCount}
+                      {totalNotificationCount > 9 ? '9+' : totalNotificationCount}
                     </span>
                   ) : null}
                 </div>

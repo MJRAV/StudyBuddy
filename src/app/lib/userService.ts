@@ -6,6 +6,7 @@ export type UserProfile = {
   uid: string;
   name: string;
   email: string;
+  isAdmin?: boolean;
   avatarUrl: string;
   bio: string;
   yearLevel: string;
@@ -108,6 +109,7 @@ export async function getUserProfile(uid: string): Promise<UserProfile | null> {
     uid,
     name: String(data.name ?? ""),
     email: String(data.email ?? ""),
+    isAdmin: Boolean(data.is_admin),
     avatarUrl: String(data.avatar_url ?? ""),
     bio: String(data.bio ?? ""),
     yearLevel: String(data.year_level ?? data.yearLevel ?? "1"),
@@ -147,6 +149,122 @@ export async function updateUserProfile(
   if (error) {
     throw error;
   }
+}
+
+export async function manageUserCourses(
+  uid: string,
+  payload: {
+    courseRoles: CourseRoles;
+    major?: string;
+    yearLevel?: string;
+    semester?: string;
+  },
+): Promise<string[]> {
+  if (!supabase) {
+    return Object.keys(payload.courseRoles);
+  }
+
+  const client = supabase;
+  const selectedCourses = Object.keys(payload.courseRoles);
+
+  await updateUserProfile(uid, {
+    major: payload.major,
+    yearLevel: payload.yearLevel,
+    semester: payload.semester,
+    courseRoles: payload.courseRoles,
+    selectedCourses,
+  });
+
+  const { data: userRow } = await client
+    .from('users')
+    .select('major,year_level,semester')
+    .eq('uid', uid)
+    .maybeSingle();
+
+  const effectiveMajor = payload.major || String(userRow?.major ?? '');
+  const effectiveYear = payload.yearLevel || String(userRow?.year_level ?? '');
+  const effectiveSemester = payload.semester || String(userRow?.semester ?? '');
+
+  const baseCoursesQuery = client
+    .from('courses')
+    .select('id,name,major,year_level,semester')
+    .in('name', selectedCourses);
+
+  const { data: matchingCourses, error: courseError } =
+    effectiveMajor && effectiveYear && effectiveSemester
+      ? await baseCoursesQuery
+          .eq('major', effectiveMajor)
+          .eq('year_level', effectiveYear)
+          .eq('semester', effectiveSemester)
+      : await baseCoursesQuery;
+
+  if (courseError) {
+    throw courseError;
+  }
+
+  const courseIdByName = new Map<string, string>();
+  (matchingCourses ?? []).forEach((row) => {
+    const name = String(row.name ?? '');
+    const id = String(row.id ?? '');
+    if (name && id && !courseIdByName.has(name)) {
+      courseIdByName.set(name, id);
+    }
+  });
+
+  const rowsToUpsert = selectedCourses
+    .map((courseName) => {
+      const courseId = courseIdByName.get(courseName);
+      if (!courseId) {
+        return null;
+      }
+
+      return {
+        user_uid: uid,
+        course_id: courseId,
+        role: payload.courseRoles[courseName],
+        updated_at: new Date().toISOString(),
+      };
+    })
+    .filter((row): row is { user_uid: string; course_id: string; role: 'mentor' | 'mentee'; updated_at: string } => Boolean(row));
+
+  const selectedCourseIds = rowsToUpsert.map((row) => row.course_id);
+
+  const { data: existingLinks, error: existingLinksError } = await client
+    .from('user_courses')
+    .select('course_id')
+    .eq('user_uid', uid);
+
+  if (existingLinksError) {
+    throw existingLinksError;
+  }
+
+  const idsToDelete = (existingLinks ?? [])
+    .map((row) => String(row.course_id ?? ''))
+    .filter((id) => id && !selectedCourseIds.includes(id));
+
+  if (idsToDelete.length) {
+    const { error: deleteError } = await client
+      .from('user_courses')
+      .delete()
+      .eq('user_uid', uid)
+      .in('course_id', idsToDelete);
+
+    if (deleteError) {
+      throw deleteError;
+    }
+  }
+
+  if (rowsToUpsert.length) {
+    const { error: upsertError } = await client
+      .from('user_courses')
+      .upsert(rowsToUpsert, { onConflict: 'user_uid,course_id' });
+
+    if (upsertError) {
+      throw upsertError;
+    }
+  }
+
+  return selectedCourses;
 }
 
 export async function uploadProfilePicture(uid: string, file: File): Promise<string> {

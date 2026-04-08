@@ -1,75 +1,16 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '@/app/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/app/components/ui/card';
 import { RadioGroup, RadioGroupItem } from '@/app/components/ui/radio-group';
 import { Label } from '@/app/components/ui/label';
 import { Badge } from '@/app/components/ui/badge';
-import { ArrowLeft, ArrowRight, GraduationCap, Calendar, BookOpen, Users, UserPlus } from 'lucide-react';
+import { Input } from '@/app/components/ui/input';
+import { ArrowLeft, ArrowRight, GraduationCap, Calendar, BookOpen, Users, UserPlus, Search } from 'lucide-react';
 import { getCurrentUserId } from '@/app/lib/authService';
-import { updateUserProfile } from '@/app/lib/userService';
-
-// Course data organized by major, year, and semester
-const coursesByMajor = {
-  BSIT: {
-    '1': {
-      1: ['Introduction to Computing', 'Programming Fundamentals', 'Discrete Mathematics', 'Technical Writing'],
-      2: ['Object-Oriented Programming', 'Data Structures', 'Computer Organization', 'Web Development I'],
-    },
-    '2': {
-      1: ['Database Systems', 'Web Development II', 'Information Management', 'Systems Analysis'],
-      2: ['Network Administration', 'Mobile Development', 'IT Project Management', 'Human-Computer Interaction'],
-    },
-    '3': {
-      1: ['Web Application Development', 'Systems Integration', 'Cloud Computing', 'Capstone Project 1'],
-      2: ['IT Infrastructure', 'Cybersecurity Fundamentals', 'DevOps Practices', 'Internship'],
-    },
-    '4': {
-      1: ['Advanced Web Technologies', 'Enterprise Systems', 'IT Service Management', 'Capstone Project 2'],
-      2: ['Emerging Technologies', 'IT Governance', 'Business Analytics', 'Practicum'],
-    },
-  },
-  BSCS: {
-    '1': {
-      1: ['Introduction to Programming', 'Calculus I', 'Physics I', 'Discrete Structures'],
-      2: ['Data Structures & Algorithms', 'Calculus II', 'Physics II', 'Digital Logic Design'],
-    },
-    '2': {
-      1: ['Computer Architecture', 'Algorithm Analysis', 'Linear Algebra', 'Software Engineering I'],
-      2: ['Operating Systems', 'Database Management', 'Probability & Statistics', 'Software Engineering II'],
-    },
-    '3': {
-      1: ['Computer Networks', 'Artificial Intelligence', 'Theory of Computation', 'Programming Languages'],
-      2: ['Machine Learning', 'Compiler Design', 'Computer Graphics', 'Research Methods'],
-    },
-    '4': {
-      1: ['Advanced Algorithms', 'Distributed Systems', 'Thesis I', 'Elective I'],
-      2: ['Parallel Computing', 'Advanced Machine Learning', 'Thesis II', 'Elective II'],
-    },
-  },
-  BSIS: {
-    '1': {
-      1: ['Fundamentals of IS', 'Introduction to Programming', 'Business Mathematics', 'Accounting Fundamentals'],
-      2: ['Systems Analysis & Design', 'Database Fundamentals', 'Business Statistics', 'Financial Management'],
-    },
-    '2': {
-      1: ['Enterprise Architecture', 'Advanced Database', 'Business Process Management', 'Marketing Management'],
-      2: ['Information Security', 'Web-Based Systems', 'Operations Management', 'Organizational Behavior'],
-    },
-    '3': {
-      1: ['Business Intelligence', 'Systems Audit', 'Strategic Management', 'Capstone Project I'],
-      2: ['ERP Systems', 'IT Risk Management', 'Change Management', 'Industry Immersion'],
-    },
-    '4': {
-      1: ['Data Analytics', 'IS Strategy & Governance', 'Innovation Management', 'Capstone Project II'],
-      2: ['Digital Transformation', 'IS Consulting', 'Entrepreneurship', 'Practicum'],
-    },
-  },
-};
-
-type Major = 'BSIT' | 'BSCS' | 'BSIS';
-type Year = '1' | '2' | '3' | '4';
-type Semester = 1 | 2;
+import { manageUserCourses } from '@/app/lib/userService';
+import { type Major, type Year, type Semester } from '@/app/lib/courseCatalog';
+import { getCoursesForTerm } from '@/app/lib/coursesService';
 
 interface CourseRoles {
   [course: string]: 'mentor' | 'mentee';
@@ -82,11 +23,26 @@ export function CourseSelection() {
   const [year, setYear] = useState<Year | null>(null);
   const [semester, setSemester] = useState<Semester | null>(null);
   const [courseRoles, setCourseRoles] = useState<CourseRoles>({});
+  const [availableCourses, setAvailableCourses] = useState<string[]>([]);
+  const [courseSearch, setCourseSearch] = useState('');
 
-  const getCourses = () => {
-    if (!major || !year || !semester) return [];
-    return coursesByMajor[major][year][semester];
-  };
+  useEffect(() => {
+    if (step !== 4 || !major || !year || !semester) {
+      setAvailableCourses([]);
+      return;
+    }
+
+    let active = true;
+    void getCoursesForTerm(major, year, semester).then((items) => {
+      if (active) {
+        setAvailableCourses(items);
+      }
+    });
+
+    return () => {
+      active = false;
+    };
+  }, [step, major, year, semester]);
 
   const toggleCourseRole = (course: string, role: 'mentor' | 'mentee') => {
     setCourseRoles((prev) => {
@@ -121,12 +77,11 @@ export function CourseSelection() {
 
     const uid = getCurrentUserId();
     if (uid) {
-      await updateUserProfile(uid, {
+      await manageUserCourses(uid, {
+        courseRoles,
         major: major ?? '',
         yearLevel: year ?? '1',
         semester: semester?.toString() ?? '',
-        courseRoles,
-        selectedCourses,
       });
     }
     
@@ -141,7 +96,17 @@ export function CourseSelection() {
     return false;
   };
 
-  const courses = getCourses();
+  const courses = availableCourses;
+  const normalizedSearch = courseSearch.trim().toLowerCase();
+  const selectedCourses = courses.filter((course) => Boolean(courseRoles[course]));
+  const unselectedCourses = courses.filter((course) => !courseRoles[course]);
+  const filteredSelectedCourses = selectedCourses.filter((course) =>
+    course.toLowerCase().includes(normalizedSearch),
+  );
+  const filteredUnselectedCourses = unselectedCourses.filter((course) =>
+    course.toLowerCase().includes(normalizedSearch),
+  );
+  const totalVisibleCourses = filteredSelectedCourses.length + filteredUnselectedCourses.length;
 
   return (
     <div className="flex min-h-screen items-center justify-center p-4 bg-amber-50">
@@ -293,47 +258,105 @@ export function CourseSelection() {
               <div className="rounded-lg bg-yellow-50 border-2 border-yellow-400 p-3 text-sm text-zinc-700">
                 <strong className="text-yellow-600">Your selection:</strong> {major} - Year {year}, Semester {semester}
               </div>
+
+              <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-3">
+                <div className="relative">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
+                  <Input
+                    value={courseSearch}
+                    onChange={(event) => setCourseSearch(event.target.value)}
+                    placeholder="Search courses"
+                    className="pl-9"
+                  />
+                </div>
+                <div className="mt-2 text-xs text-zinc-600">
+                  Showing {totalVisibleCourses} of {courses.length} courses
+                </div>
+              </div>
               
-              <div className="space-y-2">
-                {courses.map((course) => (
-                  <div
-                    key={course}
-                    className={`rounded-lg border-2 p-4 transition-all ${
-                      courseRoles[course]
-                        ? 'border-green-300 bg-green-50'
-                        : 'border-gray-200 bg-white'
-                    }`}
-                  >
-                    <div className="flex flex-col gap-3">
-                      <h4 className="font-semibold text-base">{course}</h4>
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <button
-                          onClick={() => toggleCourseRole(course, 'mentee')}
-                          className={`flex items-center gap-1.5 px-4 py-2.5 rounded-lg text-sm font-semibold transition-all ${
-                            courseRoles[course] === 'mentee'
-                              ? 'bg-green-500 text-white shadow-sm'
-                              : 'bg-gray-100 text-zinc-700 hover:bg-gray-200'
-                          }`}
-                        >
-                          <UserPlus className="h-4 w-4" />
-                          Mentee
-                        </button>
-                        <button
-                          onClick={() => toggleCourseRole(course, 'mentor')}
-                          className={`flex items-center gap-1.5 px-4 py-2.5 rounded-lg text-sm font-semibold transition-all ${
-                            courseRoles[course] === 'mentor'
-                              ? 'bg-green-600 text-white shadow-sm'
-                              : 'bg-gray-100 text-zinc-700 hover:bg-gray-200'
-                          }`}
-                        >
-                          <Users className="h-4 w-4" />
-                          Mentor
-                        </button>
+              {totalVisibleCourses > 0 ? (
+                <div className="max-h-[44vh] space-y-3 overflow-y-auto pr-1">
+                  {filteredSelectedCourses.length > 0 && (
+                    <div className="space-y-2">
+                      <div className="text-xs font-semibold uppercase tracking-wide text-green-700">
+                        Selected Courses ({filteredSelectedCourses.length})
+                      </div>
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        {filteredSelectedCourses.map((course) => (
+                          <div
+                            key={course}
+                            className="rounded-lg border-2 border-green-300 bg-green-50 p-3 transition-all"
+                          >
+                            <h4 className="line-clamp-2 min-h-10 font-semibold text-sm">{course}</h4>
+                            <div className="mt-2 flex items-center gap-2">
+                              <button
+                                onClick={() => toggleCourseRole(course, 'mentee')}
+                                className={`flex items-center gap-1.5 rounded-md px-3 py-2 text-xs font-semibold transition-all ${
+                                  courseRoles[course] === 'mentee'
+                                    ? 'bg-green-500 text-white shadow-sm'
+                                    : 'bg-gray-100 text-zinc-700 hover:bg-gray-200'
+                                }`}
+                              >
+                                <UserPlus className="h-3.5 w-3.5" />
+                                Mentee
+                              </button>
+                              <button
+                                onClick={() => toggleCourseRole(course, 'mentor')}
+                                className={`flex items-center gap-1.5 rounded-md px-3 py-2 text-xs font-semibold transition-all ${
+                                  courseRoles[course] === 'mentor'
+                                    ? 'bg-green-600 text-white shadow-sm'
+                                    : 'bg-gray-100 text-zinc-700 hover:bg-gray-200'
+                                }`}
+                              >
+                                <Users className="h-3.5 w-3.5" />
+                                Mentor
+                              </button>
+                            </div>
+                          </div>
+                        ))}
                       </div>
                     </div>
-                  </div>
-                ))}
-              </div>
+                  )}
+
+                  {filteredUnselectedCourses.length > 0 && (
+                    <div className="space-y-2">
+                      <div className="text-xs font-semibold uppercase tracking-wide text-zinc-600">
+                        Available Courses ({filteredUnselectedCourses.length})
+                      </div>
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        {filteredUnselectedCourses.map((course) => (
+                          <div
+                            key={course}
+                            className="rounded-lg border border-gray-200 bg-white p-3 transition-all"
+                          >
+                            <h4 className="line-clamp-2 min-h-10 font-semibold text-sm">{course}</h4>
+                            <div className="mt-2 flex items-center gap-2">
+                              <button
+                                onClick={() => toggleCourseRole(course, 'mentee')}
+                                className="flex items-center gap-1.5 rounded-md bg-gray-100 px-3 py-2 text-xs font-semibold text-zinc-700 transition-all hover:bg-gray-200"
+                              >
+                                <UserPlus className="h-3.5 w-3.5" />
+                                Mentee
+                              </button>
+                              <button
+                                onClick={() => toggleCourseRole(course, 'mentor')}
+                                className="flex items-center gap-1.5 rounded-md bg-gray-100 px-3 py-2 text-xs font-semibold text-zinc-700 transition-all hover:bg-gray-200"
+                              >
+                                <Users className="h-3.5 w-3.5" />
+                                Mentor
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <p className="rounded-lg border border-dashed border-zinc-300 bg-zinc-50 py-6 text-center text-sm text-zinc-600">
+                  No courses match your search.
+                </p>
+              )}
 
               <div className="text-sm text-zinc-600 mt-4">
                 {Object.keys(courseRoles).length} {Object.keys(courseRoles).length === 1 ? 'course' : 'courses'} selected

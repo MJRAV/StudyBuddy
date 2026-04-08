@@ -39,6 +39,19 @@ export type FriendRequest = {
   createdAt: string;
 };
 
+export type PostInteractionNotification = {
+  id: string;
+  type: 'like' | 'comment';
+  postId: string;
+  postPreview: string;
+  postCourse: string;
+  actorId: string;
+  actorName: string;
+  actorAvatarUrl: string;
+  commentContent: string;
+  createdAt: string;
+};
+
 type UserRow = {
   uid: string;
   userRole?: unknown;
@@ -57,6 +70,196 @@ type UserSummary = {
   courses: string[];
   avatarUrl: string;
 };
+
+function getPostNotificationSeenKey(uid: string): string {
+  return `postNotificationsLastSeenAt:${uid}`;
+}
+
+export function markPostNotificationsSeen(uid: string): void {
+  if (typeof window === 'undefined' || !uid) {
+    return;
+  }
+  window.localStorage.setItem(getPostNotificationSeenKey(uid), new Date().toISOString());
+}
+
+function getPostNotificationsSeenAt(uid: string): string {
+  if (typeof window === 'undefined' || !uid) {
+    return '';
+  }
+  return window.localStorage.getItem(getPostNotificationSeenKey(uid)) || '';
+}
+
+async function fetchPostInteractionNotifications(
+  currentUserId: string,
+): Promise<PostInteractionNotification[]> {
+  if (!supabase || !currentUserId) {
+    return [];
+  }
+
+  const client = supabase;
+  const { data: ownPosts, error: ownPostsError } = await client
+    .from('community_posts')
+    .select('id,content,course')
+    .eq('author_id', currentUserId);
+
+  if (ownPostsError) {
+    throw toReadableError(ownPostsError, 'Unable to load your posts for notifications.');
+  }
+
+  const postIds = (ownPosts ?? []).map((item) => String(item.id ?? '')).filter(Boolean);
+  if (postIds.length === 0) {
+    return [];
+  }
+
+  const postById = new Map(
+    (ownPosts ?? []).map((item) => [
+      String(item.id ?? ''),
+      {
+        content: String(item.content ?? ''),
+        course: String(item.course ?? 'General'),
+      },
+    ]),
+  );
+
+  const [likesResp, commentsResp] = await Promise.all([
+    client
+      .from('community_post_likes')
+      .select('post_id,user_id,created_at')
+      .in('post_id', postIds)
+      .neq('user_id', currentUserId)
+      .order('created_at', { ascending: false }),
+    client
+      .from('community_post_comments')
+      .select('id,post_id,author_id,author_name,content,created_at')
+      .in('post_id', postIds)
+      .neq('author_id', currentUserId)
+      .order('created_at', { ascending: false }),
+  ]);
+
+  if (likesResp.error) {
+    throw toReadableError(likesResp.error, 'Unable to load like notifications.');
+  }
+
+  if (commentsResp.error) {
+    throw toReadableError(commentsResp.error, 'Unable to load comment notifications.');
+  }
+
+  const actorIds = Array.from(
+    new Set([
+      ...(likesResp.data ?? []).map((item) => String(item.user_id ?? '')).filter(Boolean),
+      ...(commentsResp.data ?? []).map((item) => String(item.author_id ?? '')).filter(Boolean),
+    ]),
+  );
+
+  const { data: actorRows } = actorIds.length
+    ? await client.from('users').select('uid,name,avatar_url').in('uid', actorIds)
+    : { data: [] as Array<{ uid?: unknown; name?: unknown; avatar_url?: unknown }> };
+
+  const actorById = new Map(
+    (actorRows ?? []).map((item) => [
+      String(item.uid ?? ''),
+      {
+        name: String(item.name ?? 'User'),
+        avatarUrl: String(item.avatar_url ?? ''),
+      },
+    ]),
+  );
+
+  const likeNotifications: PostInteractionNotification[] = (likesResp.data ?? []).map((row) => {
+    const postId = String(row.post_id ?? '');
+    const actorId = String(row.user_id ?? '');
+    const post = postById.get(postId) ?? { content: '', course: 'General' };
+    const actor = actorById.get(actorId) ?? { name: 'User', avatarUrl: '' };
+
+    return {
+      id: `like-${postId}-${actorId}`,
+      type: 'like',
+      postId,
+      postPreview: post.content,
+      postCourse: post.course,
+      actorId,
+      actorName: actor.name,
+      actorAvatarUrl: actor.avatarUrl,
+      commentContent: '',
+      createdAt: String(row.created_at ?? ''),
+    };
+  });
+
+  const commentNotifications: PostInteractionNotification[] = (commentsResp.data ?? []).map((row) => {
+    const postId = String(row.post_id ?? '');
+    const actorId = String(row.author_id ?? '');
+    const post = postById.get(postId) ?? { content: '', course: 'General' };
+    const actor = actorById.get(actorId) ?? {
+      name: String(row.author_name ?? 'User'),
+      avatarUrl: '',
+    };
+
+    return {
+      id: `comment-${String(row.id ?? '')}`,
+      type: 'comment',
+      postId,
+      postPreview: post.content,
+      postCourse: post.course,
+      actorId,
+      actorName: actor.name,
+      actorAvatarUrl: actor.avatarUrl,
+      commentContent: String(row.content ?? ''),
+      createdAt: String(row.created_at ?? ''),
+    };
+  });
+
+  return [...likeNotifications, ...commentNotifications].sort((a, b) =>
+    b.createdAt.localeCompare(a.createdAt),
+  );
+}
+
+export function subscribePostInteractionNotifications(
+  currentUserId: string,
+  onData: (items: PostInteractionNotification[]) => void,
+): Unsubscribe | null {
+  if (!supabase || !currentUserId) {
+    return null;
+  }
+
+  let active = true;
+
+  const fetch = async () => {
+    try {
+      const items = await fetchPostInteractionNotifications(currentUserId);
+      if (!active) {
+        return;
+      }
+      onData(items);
+    } catch {
+      if (active) {
+        onData([]);
+      }
+    }
+  };
+
+  void fetch();
+  const interval = window.setInterval(() => {
+    void fetch();
+  }, 4000);
+
+  return () => {
+    active = false;
+    window.clearInterval(interval);
+  };
+}
+
+export function subscribeUnreadPostNotificationsCount(
+  currentUserId: string,
+  onCount: (count: number) => void,
+): Unsubscribe | null {
+  return subscribePostInteractionNotifications(currentUserId, (items) => {
+    const seenAt = getPostNotificationsSeenAt(currentUserId);
+    const unread = seenAt
+      ? items.filter((item) => item.createdAt > seenAt).length
+      : items.length;
+    onCount(unread);
+  });
+}
 
 function toReadableError(error: unknown, fallbackMessage: string): Error {
   if (!error) {

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Dialog,
   DialogContent,
@@ -10,68 +10,11 @@ import { Button } from '@/app/components/ui/button';
 import { Label } from '@/app/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/app/components/ui/select';
 import { Badge } from '@/app/components/ui/badge';
-import { Users, UserPlus } from 'lucide-react';
+import { Input } from '@/app/components/ui/input';
+import { Users, UserPlus, Search } from 'lucide-react';
+import { type Major, type Year } from '@/app/lib/courseCatalog';
+import { getCoursesForTerm } from '@/app/lib/coursesService';
 
-// Same course data structure
-const coursesByMajor = {
-  BSIT: {
-    '1': {
-      1: ['Introduction to Computing', 'Programming Fundamentals', 'Discrete Mathematics', 'Technical Writing'],
-      2: ['Object-Oriented Programming', 'Data Structures', 'Computer Organization', 'Web Development I'],
-    },
-    '2': {
-      1: ['Database Systems', 'Web Development II', 'Information Management', 'Systems Analysis'],
-      2: ['Network Administration', 'Mobile Development', 'IT Project Management', 'Human-Computer Interaction'],
-    },
-    '3': {
-      1: ['Web Application Development', 'Systems Integration', 'Cloud Computing', 'Capstone Project 1'],
-      2: ['IT Infrastructure', 'Cybersecurity Fundamentals', 'DevOps Practices', 'Internship'],
-    },
-    '4': {
-      1: ['Advanced Web Technologies', 'Enterprise Systems', 'IT Service Management', 'Capstone Project 2'],
-      2: ['Emerging Technologies', 'IT Governance', 'Business Analytics', 'Practicum'],
-    },
-  },
-  BSCS: {
-    '1': {
-      1: ['Introduction to Programming', 'Calculus I', 'Physics I', 'Discrete Structures'],
-      2: ['Data Structures & Algorithms', 'Calculus II', 'Physics II', 'Digital Logic Design'],
-    },
-    '2': {
-      1: ['Computer Architecture', 'Algorithm Analysis', 'Linear Algebra', 'Software Engineering I'],
-      2: ['Operating Systems', 'Database Management', 'Probability & Statistics', 'Software Engineering II'],
-    },
-    '3': {
-      1: ['Computer Networks', 'Artificial Intelligence', 'Theory of Computation', 'Programming Languages'],
-      2: ['Machine Learning', 'Compiler Design', 'Computer Graphics', 'Research Methods'],
-    },
-    '4': {
-      1: ['Advanced Algorithms', 'Distributed Systems', 'Thesis I', 'Elective I'],
-      2: ['Parallel Computing', 'Advanced Machine Learning', 'Thesis II', 'Elective II'],
-    },
-  },
-  BSIS: {
-    '1': {
-      1: ['Fundamentals of IS', 'Introduction to Programming', 'Business Mathematics', 'Accounting Fundamentals'],
-      2: ['Systems Analysis & Design', 'Database Fundamentals', 'Business Statistics', 'Financial Management'],
-    },
-    '2': {
-      1: ['Enterprise Architecture', 'Advanced Database', 'Business Process Management', 'Marketing Management'],
-      2: ['Information Security', 'Web-Based Systems', 'Operations Management', 'Organizational Behavior'],
-    },
-    '3': {
-      1: ['Business Intelligence', 'Systems Audit', 'Strategic Management', 'Capstone Project I'],
-      2: ['ERP Systems', 'IT Risk Management', 'Change Management', 'Industry Immersion'],
-    },
-    '4': {
-      1: ['Data Analytics', 'IS Strategy & Governance', 'Innovation Management', 'Capstone Project II'],
-      2: ['Digital Transformation', 'IS Consulting', 'Entrepreneurship', 'Practicum'],
-    },
-  },
-};
-
-type Major = 'BSIT' | 'BSCS' | 'BSIS';
-type Year = '1' | '2' | '3' | '4';
 type Semester = '1' | '2';
 
 interface CourseRoles {
@@ -90,6 +33,21 @@ export function ManageCoursesDialog({ open, onOpenChange, currentCourses, onSave
   const [year, setYear] = useState<Year>((localStorage.getItem('yearLevel') as Year) || '1');
   const [semester, setSemester] = useState<Semester>((localStorage.getItem('semester') as Semester) || '1');
   const [tempCourses, setTempCourses] = useState<CourseRoles>(currentCourses);
+  const [availableCourses, setAvailableCourses] = useState<string[]>([]);
+  const [courseSearch, setCourseSearch] = useState('');
+
+  useEffect(() => {
+    let active = true;
+    void getCoursesForTerm(major, year, Number(semester) as 1 | 2).then((items) => {
+      if (active) {
+        setAvailableCourses(items);
+      }
+    });
+
+    return () => {
+      active = false;
+    };
+  }, [major, year, semester]);
 
   const toggleCourseRole = (course: string, role: 'mentor' | 'mentee') => {
     setTempCourses((prev) => {
@@ -118,7 +76,16 @@ export function ManageCoursesDialog({ open, onOpenChange, currentCourses, onSave
     onOpenChange(false);
   };
 
-  const availableCourses = coursesByMajor[major]?.[year]?.[parseInt(semester) as 1 | 2] || [];
+  const normalizedSearch = courseSearch.trim().toLowerCase();
+  const selectedCourses = availableCourses.filter((course) => Boolean(tempCourses[course]));
+  const unselectedCourses = availableCourses.filter((course) => !tempCourses[course]);
+  const filteredSelectedCourses = selectedCourses.filter((course) =>
+    course.toLowerCase().includes(normalizedSearch),
+  );
+  const filteredUnselectedCourses = unselectedCourses.filter((course) =>
+    course.toLowerCase().includes(normalizedSearch),
+  );
+  const totalVisibleCourses = filteredSelectedCourses.length + filteredUnselectedCourses.length;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -185,52 +152,104 @@ export function ManageCoursesDialog({ open, onOpenChange, currentCourses, onSave
               </Badge>
             </div>
 
-            {availableCourses.length > 0 ? (
-              <div className="space-y-2">
-                {availableCourses.map((course: string) => (
-                  <div
-                    key={course}
-                    className={`rounded-lg border-2 p-4 transition-all ${
-                      tempCourses[course]
-                        ? 'border-green-300 bg-green-50'
-                        : 'border-gray-200 bg-white'
-                    }`}
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="flex-1">
-                        <h5 className="font-medium text-sm mb-2">{course}</h5>
-                        <div className="flex items-center gap-2">
-                          <button
-                            onClick={() => toggleCourseRole(course, 'mentee')}
-                            className={`flex items-center gap-1.5 px-4 py-2 rounded-md text-xs font-semibold transition-all ${
-                              tempCourses[course] === 'mentee'
-                                ? 'bg-green-500 text-white shadow-sm'
-                                : 'bg-gray-100 text-zinc-700 hover:bg-gray-200'
-                            }`}
-                          >
-                            <UserPlus className="h-4 w-4" />
-                            Mentee
-                          </button>
-                          <button
-                            onClick={() => toggleCourseRole(course, 'mentor')}
-                            className={`flex items-center gap-1.5 px-4 py-2 rounded-md text-xs font-semibold transition-all ${
-                              tempCourses[course] === 'mentor'
-                                ? 'bg-green-600 text-white shadow-sm'
-                                : 'bg-gray-100 text-zinc-700 hover:bg-gray-200'
-                            }`}
-                          >
-                            <Users className="h-4 w-4" />
-                            Mentor
-                          </button>
+            <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-3">
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
+                <Input
+                  value={courseSearch}
+                  onChange={(event) => setCourseSearch(event.target.value)}
+                  placeholder="Search courses"
+                  className="pl-9"
+                />
+              </div>
+              <div className="mt-2 text-xs text-zinc-600">
+                Showing {totalVisibleCourses} of {availableCourses.length} courses
+              </div>
+            </div>
+
+            {availableCourses.length > 0 && totalVisibleCourses > 0 ? (
+              <div className="max-h-[42vh] space-y-3 overflow-y-auto pr-1">
+                {filteredSelectedCourses.length > 0 && (
+                  <div className="space-y-2">
+                    <div className="text-xs font-semibold uppercase tracking-wide text-green-700">
+                      Selected Courses ({filteredSelectedCourses.length})
+                    </div>
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      {filteredSelectedCourses.map((course) => (
+                        <div
+                          key={course}
+                          className="rounded-lg border-2 border-green-300 bg-green-50 p-3 transition-all"
+                        >
+                          <h5 className="line-clamp-2 min-h-10 font-medium text-sm">{course}</h5>
+                          <div className="mt-2 flex items-center gap-2">
+                            <button
+                              onClick={() => toggleCourseRole(course, 'mentee')}
+                              className={`flex items-center gap-1.5 rounded-md px-3 py-2 text-xs font-semibold transition-all ${
+                                tempCourses[course] === 'mentee'
+                                  ? 'bg-green-500 text-white shadow-sm'
+                                  : 'bg-gray-100 text-zinc-700 hover:bg-gray-200'
+                              }`}
+                            >
+                              <UserPlus className="h-3.5 w-3.5" />
+                              Mentee
+                            </button>
+                            <button
+                              onClick={() => toggleCourseRole(course, 'mentor')}
+                              className={`flex items-center gap-1.5 rounded-md px-3 py-2 text-xs font-semibold transition-all ${
+                                tempCourses[course] === 'mentor'
+                                  ? 'bg-green-600 text-white shadow-sm'
+                                  : 'bg-gray-100 text-zinc-700 hover:bg-gray-200'
+                              }`}
+                            >
+                              <Users className="h-3.5 w-3.5" />
+                              Mentor
+                            </button>
+                          </div>
                         </div>
-                      </div>
+                      ))}
                     </div>
                   </div>
-                ))}
+                )}
+
+                {filteredUnselectedCourses.length > 0 && (
+                  <div className="space-y-2">
+                    <div className="text-xs font-semibold uppercase tracking-wide text-zinc-600">
+                      Available Courses ({filteredUnselectedCourses.length})
+                    </div>
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      {filteredUnselectedCourses.map((course) => (
+                        <div
+                          key={course}
+                          className="rounded-lg border border-gray-200 bg-white p-3 transition-all"
+                        >
+                          <h5 className="line-clamp-2 min-h-10 font-medium text-sm">{course}</h5>
+                          <div className="mt-2 flex items-center gap-2">
+                            <button
+                              onClick={() => toggleCourseRole(course, 'mentee')}
+                              className="flex items-center gap-1.5 rounded-md bg-gray-100 px-3 py-2 text-xs font-semibold text-zinc-700 transition-all hover:bg-gray-200"
+                            >
+                              <UserPlus className="h-3.5 w-3.5" />
+                              Mentee
+                            </button>
+                            <button
+                              onClick={() => toggleCourseRole(course, 'mentor')}
+                              className="flex items-center gap-1.5 rounded-md bg-gray-100 px-3 py-2 text-xs font-semibold text-zinc-700 transition-all hover:bg-gray-200"
+                            >
+                              <Users className="h-3.5 w-3.5" />
+                              Mentor
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             ) : (
               <p className="text-sm text-zinc-500 text-center py-4">
-                No courses available for this selection
+                {availableCourses.length > 0
+                  ? 'No courses match your search'
+                  : 'No courses available for this selection'}
               </p>
             )}
           </div>

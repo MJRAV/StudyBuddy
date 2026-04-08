@@ -11,14 +11,9 @@ import { getCurrentUserId, loginWithEmail, loginWithGoogle } from '@/app/lib/aut
 import { getUserProfile } from '@/app/lib/userService';
 
 function getRouteFromLocalState(): string {
-  const userRole = localStorage.getItem('userRole') || '';
   const hasSeenOnboarding = localStorage.getItem('hasSeenOnboarding') === 'true';
   const selectedCourses = JSON.parse(localStorage.getItem('selectedCourses') || '[]') as string[];
   const hasCourses = selectedCourses.length > 0;
-
-  if (!userRole) {
-    return '/role';
-  }
 
   if (!hasCourses) {
     return '/courses';
@@ -35,7 +30,7 @@ async function syncProfileToLocalState(): Promise<string> {
 
   const profile = await getUserProfile(uid);
   if (!profile) {
-    return '/role';
+    return '/courses';
   }
 
   localStorage.setItem('userName', profile.name || 'User');

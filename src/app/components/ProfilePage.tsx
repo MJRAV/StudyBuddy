@@ -11,7 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { ArrowLeft, Edit2, Save, X, GraduationCap, BookOpen, User as UserIcon, LogOut } from 'lucide-react';
 import { ManageCoursesDialog } from '@/app/components/ManageCoursesDialog';
 import { getCurrentUserId, logoutUser } from '@/app/lib/authService';
-import { getUserProfile, updateUserProfile, uploadProfilePicture } from '@/app/lib/userService';
+import { getUserProfile, manageUserCourses, updateUserProfile, uploadProfilePicture } from '@/app/lib/userService';
 import { subscribeBuddies } from '@/app/lib/socialService';
 
 interface CourseRoles {
@@ -148,10 +148,7 @@ export function ProfilePage() {
     const uid = getCurrentUserId();
     if (uid) {
       try {
-        await updateUserProfile(uid, {
-          courseRoles: newCourses,
-          selectedCourses,
-        });
+        await manageUserCourses(uid, { courseRoles: newCourses });
         const updatedProfile = { ...profile, courseRoles: newCourses };
         setProfile(updatedProfile);
         setEditedProfile(updatedProfile);
@@ -497,7 +494,7 @@ export function ProfilePage() {
                 onClick={() => navigate('/app/admin')}
                 className="mb-3 w-full"
               >
-                Open Admin Data Viewer
+                Open Admin Panel
               </Button>
               <Button
                 variant="destructive"

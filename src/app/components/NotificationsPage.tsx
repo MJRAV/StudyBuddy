@@ -7,10 +7,13 @@ import { Bell, Check, X } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { getCurrentUserId } from '@/app/lib/authService';
 import {
+  markPostNotificationsSeen,
+  subscribePostInteractionNotifications,
   respondToFriendRequest,
   subscribeIncomingFriendRequests,
   subscribeOutgoingFriendRequests,
   type FriendRequest,
+  type PostInteractionNotification,
 } from '@/app/lib/socialService';
 
 export function NotificationsPage() {
@@ -18,6 +21,7 @@ export function NotificationsPage() {
   const userId = getCurrentUserId();
   const [incomingRequests, setIncomingRequests] = useState<FriendRequest[]>([]);
   const [outgoingRequests, setOutgoingRequests] = useState<FriendRequest[]>([]);
+  const [postNotifications, setPostNotifications] = useState<PostInteractionNotification[]>([]);
   const [busyRequestId, setBusyRequestId] = useState('');
   const [error, setError] = useState('');
 
@@ -28,10 +32,14 @@ export function NotificationsPage() {
 
     const unsubscribeIncoming = subscribeIncomingFriendRequests(userId, setIncomingRequests);
     const unsubscribeOutgoing = subscribeOutgoingFriendRequests(userId, setOutgoingRequests);
+    const unsubscribePostInteractions = subscribePostInteractionNotifications(userId, setPostNotifications);
+
+    markPostNotificationsSeen(userId);
 
     return () => {
       unsubscribeIncoming?.();
       unsubscribeOutgoing?.();
+      unsubscribePostInteractions?.();
     };
   }, [userId]);
 
@@ -39,6 +47,8 @@ export function NotificationsPage() {
     () => incomingRequests.filter((item) => item.status === 'pending'),
     [incomingRequests],
   );
+
+  const notificationBadgeCount = pendingIncoming.length + postNotifications.length;
 
   const handleDecision = async (request: FriendRequest, decision: 'accepted' | 'declined') => {
     if (!userId) {
@@ -65,8 +75,8 @@ export function NotificationsPage() {
       <div className="mb-5 flex items-center gap-2">
         <Bell className="h-6 w-6 text-green-600" />
         <h1 className="text-2xl font-bold">Notifications</h1>
-        {pendingIncoming.length > 0 ? (
-          <Badge className="bg-green-600 text-white">{pendingIncoming.length} new</Badge>
+        {notificationBadgeCount > 0 ? (
+          <Badge className="bg-green-600 text-white">{notificationBadgeCount} new</Badge>
         ) : null}
       </div>
 
@@ -127,6 +137,48 @@ export function NotificationsPage() {
           ))}
           {pendingIncoming.length === 0 ? (
             <p className="text-sm text-zinc-500">No pending friend requests.</p>
+          ) : null}
+        </CardContent>
+      </Card>
+
+      <Card className="mb-4">
+        <CardHeader>
+          <CardTitle>Post Activity</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {postNotifications.map((item) => (
+            <div key={item.id} className="rounded-lg border bg-white p-3">
+              <div className="flex items-start gap-3">
+                <Avatar>
+                  {item.actorAvatarUrl ? (
+                    <img
+                      src={item.actorAvatarUrl}
+                      alt={item.actorName}
+                      className="h-full w-full rounded-full object-cover"
+                    />
+                  ) : (
+                    <AvatarFallback>{item.actorName.split(' ').map((n) => n[0]).join('')}</AvatarFallback>
+                  )}
+                </Avatar>
+                <div className="flex-1 space-y-1">
+                  <p className="text-sm">
+                    <span className="font-semibold">{item.actorName}</span>{' '}
+                    {item.type === 'like' ? 'liked your post' : 'commented on your post'}
+                  </p>
+                  <p className="text-xs text-zinc-600">{item.postCourse}</p>
+                  <p className="rounded bg-zinc-50 px-2 py-1 text-xs text-zinc-700">
+                    {item.postPreview || 'Your post'}
+                  </p>
+                  {item.type === 'comment' && item.commentContent ? (
+                    <p className="text-xs text-zinc-700">"{item.commentContent}"</p>
+                  ) : null}
+                  <p className="text-[11px] text-zinc-500">{new Date(item.createdAt).toLocaleString()}</p>
+                </div>
+              </div>
+            </div>
+          ))}
+          {postNotifications.length === 0 ? (
+            <p className="text-sm text-zinc-500">No likes or comments on your posts yet.</p>
           ) : null}
         </CardContent>
       </Card>

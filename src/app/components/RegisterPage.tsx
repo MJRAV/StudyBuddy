@@ -42,7 +42,7 @@ export function RegisterPage() {
       }
 
       localStorage.setItem('isLoggedIn', 'true');
-      navigate('/role');
+      navigate('/courses');
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unable to create account.';
       setError(message);
@@ -66,7 +66,7 @@ export function RegisterPage() {
       }
 
       localStorage.setItem('isLoggedIn', 'true');
-      navigate('/role');
+      navigate('/courses');
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unable to sign up with Google.';
       setError(message);
