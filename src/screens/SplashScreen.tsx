@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
-import { Animated, Easing, StyleSheet, Text, View } from 'react-native';
-import { colors } from '../ui/theme';
+import { Animated, Easing, Image, StyleSheet, Text, View } from 'react-native';
+import { colors, spacing } from '../ui/theme';
 
 export function SplashScreen() {
   const dot1 = useRef(new Animated.Value(0)).current;
@@ -46,9 +46,11 @@ export function SplashScreen() {
       <View style={styles.bgCircleTwo} />
 
       <View style={styles.inner}>
-        <View style={styles.logoWrap}>
-          <Text style={styles.logoGlyph}>SB</Text>
-        </View>
+        <Image
+          source={require('../../assets/logo.png')}
+          style={styles.logo}
+          resizeMode="contain"
+        />
         <Text style={styles.title}>StudyBuddy</Text>
         <Text style={styles.subtitle}>Your Learning Companion</Text>
         <View style={styles.dotsRow}>
@@ -99,21 +101,10 @@ const styles = StyleSheet.create({
     right: -150,
     opacity: 0.9,
   },
-  logoWrap: {
-    width: 106,
-    height: 106,
-    borderRadius: 53,
-    backgroundColor: '#d9f99d',
-    borderWidth: 3,
-    borderColor: '#86efac',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  logoGlyph: {
-    color: colors.green,
-    fontSize: 30,
-    fontWeight: '900',
-    letterSpacing: 1,
+  logo: {
+    width: 160,
+    height: 160,
+    marginBottom: spacing.md,
   },
   title: {
     marginTop: 24,

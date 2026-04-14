@@ -277,7 +277,10 @@ export function CourseSelectionScreen({ uid, onComplete }: Props) {
                 onChangeText={setSearch}
                 style={styles.searchInput}
               />
-              <ScrollView style={styles.courseList}>
+              <Text style={styles.resultsMeta}>
+                Found {visibleCourses.length} course{visibleCourses.length === 1 ? '' : 's'}
+              </Text>
+              <View style={styles.courseList}>
                 {visibleCourses.map((course) => (
                   <View key={course} style={styles.courseCard}>
                     <Text style={styles.courseName}>{course}</Text>
@@ -297,7 +300,7 @@ export function CourseSelectionScreen({ uid, onComplete }: Props) {
                     </View>
                   </View>
                 ))}
-              </ScrollView>
+              </View>
             </View>
           ) : null}
 
@@ -433,7 +436,12 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   courseList: {
-    flex: 1,
+    marginTop: 4,
+  },
+  resultsMeta: {
+    marginBottom: 6,
+    color: colors.textMuted,
+    fontSize: 12,
   },
   courseCard: {
     borderWidth: 1,

@@ -1,9 +1,28 @@
 import type { ReactNode } from 'react';
-import { Pressable, StyleSheet, Text, TextInput, View, type TextInputProps, type ViewProps } from 'react-native';
-import { colors, radius, shadows, spacing } from './theme';
+import { Animated, Pressable, StyleSheet, Text, TextInput, View, type TextInputProps, type ViewProps } from 'react-native';
+import { useEffect, useRef } from 'react';
+import { colors, radius, shadows, spacing, typography } from './theme';
 
 export function Screen({ children, style }: { children: ReactNode; style?: ViewProps['style'] }) {
   return <View style={[styles.screen, style]}>{children}</View>;
+}
+
+export function AnimatedScreen({ children, style }: { children: ReactNode; style?: ViewProps['style'] }) {
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    Animated.timing(fadeAnim, {
+      toValue: 1,
+      duration: 300,
+      useNativeDriver: true,
+    }).start();
+  }, [fadeAnim]);
+
+  return (
+    <Animated.View style={[styles.screen, style, { opacity: fadeAnim }]}>
+      {children}
+    </Animated.View>
+  );
 }
 
 export function Card({ children, style }: { children: ReactNode; style?: ViewProps['style'] }) {
@@ -26,7 +45,7 @@ export function AppInput(props: TextInputProps) {
   return <TextInput placeholderTextColor={colors.textMuted} {...props} style={[styles.input, props.style]} />;
 }
 
-type ButtonVariant = 'primary' | 'outline' | 'danger' | 'blue' | 'gold';
+type ButtonVariant = 'primary' | 'outline' | 'danger' | 'blue' | 'gold' | 'reject';
 
 export function AppButton({
   text,
@@ -39,28 +58,54 @@ export function AppButton({
   disabled?: boolean;
   variant?: ButtonVariant;
 }) {
+  const scaleAnim = useRef(new Animated.Value(1)).current;
+
+  const handlePressIn = () => {
+    Animated.spring(scaleAnim, {
+      toValue: 0.95,
+      useNativeDriver: true,
+      tension: 200,
+      friction: 10,
+    }).start();
+  };
+
+  const handlePressOut = () => {
+    Animated.spring(scaleAnim, {
+      toValue: 1,
+      useNativeDriver: true,
+      tension: 200,
+      friction: 10,
+    }).start();
+  };
+
   return (
-    <Pressable
-      onPress={onPress}
-      disabled={disabled}
-      style={[
-        styles.button,
-        variant === 'outline' && styles.buttonOutline,
-        variant === 'danger' && styles.buttonDanger,
-        variant === 'blue' && styles.buttonBlue,
-        variant === 'gold' && styles.buttonGold,
-        disabled && styles.buttonDisabled,
-      ]}
-    >
-      <Text
+    <Animated.View style={{ transform: [{ scale: scaleAnim }] }}>
+      <Pressable
+        onPress={onPress}
+        onPressIn={handlePressIn}
+        onPressOut={handlePressOut}
+        disabled={disabled}
         style={[
-          styles.buttonText,
-          variant === 'outline' && styles.buttonOutlineText,
+          styles.button,
+          variant === 'outline' && styles.buttonOutline,
+          variant === 'danger' && styles.buttonDanger,
+          variant === 'blue' && styles.buttonBlue,
+          variant === 'gold' && styles.buttonGold,
+          variant === 'reject' && styles.buttonReject,
+          disabled && styles.buttonDisabled,
         ]}
       >
-        {text}
-      </Text>
-    </Pressable>
+        <Text
+          style={[
+            styles.buttonText,
+            (variant === 'outline' || variant === 'reject') && styles.buttonOutlineText,
+            variant === 'reject' && styles.buttonRejectText,
+          ]}
+        >
+          {text}
+        </Text>
+      </Pressable>
+    </Animated.View>
   );
 }
 
@@ -82,47 +127,52 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
     borderRadius: radius.lg,
     backgroundColor: colors.bgCard,
-    padding: spacing.md,
+    padding: spacing.lg,
+    marginBottom: spacing.md,
     ...shadows.card,
   },
   heading: {
-    fontSize: 28,
-    fontWeight: '800',
+    ...typography.heading,
     color: colors.textStrong,
+    marginBottom: spacing.md,
   },
   subheading: {
-    marginTop: 6,
+    ...typography.subheading,
     color: colors.textBody,
-    fontSize: 16,
+    marginTop: spacing.sm,
+    marginBottom: spacing.sm,
   },
   label: {
-    fontSize: 12,
+    ...typography.label,
     color: colors.textMuted,
-    marginBottom: 4,
+    marginBottom: spacing.sm,
   },
   input: {
+    ...typography.bodySmall,
     borderWidth: 1,
     borderColor: colors.borderStrong,
     borderRadius: radius.md,
     backgroundColor: colors.white,
     color: colors.textBody,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    marginBottom: 10,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.md,
+    marginBottom: spacing.lg,
   },
   button: {
+    ...typography.buttonText,
     borderRadius: radius.md,
     backgroundColor: colors.green,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
     alignItems: 'center',
     justifyContent: 'center',
-    minHeight: 42,
+    minHeight: 48,
+    marginVertical: spacing.sm,
   },
   buttonOutline: {
     backgroundColor: colors.white,
-    borderWidth: 1,
-    borderColor: colors.borderStrong,
+    borderWidth: 2,
+    borderColor: colors.green,
   },
   buttonDanger: {
     backgroundColor: colors.red,
@@ -133,34 +183,45 @@ const styles = StyleSheet.create({
   buttonGold: {
     backgroundColor: colors.gold,
   },
+  buttonReject: {
+    backgroundColor: colors.white,
+    borderWidth: 2,
+    borderColor: colors.red,
+  },
   buttonDisabled: {
-    opacity: 0.6,
+    opacity: 0.5,
   },
   buttonText: {
     color: colors.white,
     fontWeight: '700',
   },
   buttonOutlineText: {
-    color: colors.textBody,
+    color: colors.green,
+    fontWeight: '700',
+  },
+  buttonRejectText: {
+    color: colors.red,
+    fontWeight: '700',
   },
   badge: {
     borderWidth: 1,
     borderColor: colors.borderStrong,
     borderRadius: radius.pill,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
     backgroundColor: colors.white,
+    marginHorizontal: spacing.xs,
   },
   badgeActive: {
     borderColor: colors.green,
     backgroundColor: colors.greenSoft,
   },
   badgeText: {
+    ...typography.labelSmall,
     color: colors.textBody,
-    fontWeight: '600',
-    fontSize: 12,
   },
   badgeTextActive: {
     color: colors.green,
+    fontWeight: '700',
   },
 });

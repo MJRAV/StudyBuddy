@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { supabase } from '../lib/supabase';
 import type { Major, Semester, Year } from '../lib/courseCatalog';
 import { AppButton, AppInput, Badge, Card, Heading, Screen, Subheading } from '../ui/components';
@@ -21,6 +21,16 @@ type AdminLog = {
   createdAt: string;
 };
 
+type AdminUser = {
+  uid: string;
+  email: string;
+  name: string;
+  major: string;
+  yearLevel: string;
+  isAdmin: boolean;
+  selectedCoursesCount: number;
+};
+
 type Props = {
   uid: string;
 };
@@ -28,6 +38,7 @@ type Props = {
 export function AdminScreen({ uid }: Props) {
   const [isAdmin, setIsAdmin] = useState(false);
   const [usersCount, setUsersCount] = useState(0);
+  const [users, setUsers] = useState<AdminUser[]>([]);
   const [courses, setCourses] = useState<AdminCourse[]>([]);
   const [postsCount, setPostsCount] = useState(0);
   const [requestsCount, setRequestsCount] = useState(0);
@@ -37,8 +48,14 @@ export function AdminScreen({ uid }: Props) {
   const [newMajor, setNewMajor] = useState<Major>('BSIT');
   const [newYear, setNewYear] = useState<Year>('1');
   const [newSem, setNewSem] = useState<Semester>('1');
+  const [editingCourse, setEditingCourse] = useState<AdminCourse | null>(null);
+  const [editCourseName, setEditCourseName] = useState('');
+  const [editMajor, setEditMajor] = useState<Major>('BSIT');
+  const [editYear, setEditYear] = useState<Year>('1');
+  const [editSem, setEditSem] = useState<Semester>('1');
 
   const [search, setSearch] = useState('');
+  const [userSearch, setUserSearch] = useState('');
 
   useEffect(() => {
     let active = true;
@@ -48,9 +65,14 @@ export function AdminScreen({ uid }: Props) {
         return;
       }
 
-      const [meResp, usersResp, coursesResp, postsResp, requestsResp, logsResp] = await Promise.all([
+      const [meResp, usersResp, usersListResp, coursesResp, postsResp, requestsResp, logsResp] = await Promise.all([
         supabase.from('users').select('is_admin').eq('uid', uid).maybeSingle(),
         supabase.from('users').select('uid', { count: 'exact', head: true }),
+        supabase
+          .from('users')
+          .select('uid,email,name,major,year_level,is_admin,selected_courses')
+          .order('created_at', { ascending: false })
+          .limit(250),
         supabase.from('courses').select('id,name,major,year_level,semester', { count: 'exact' }).order('major', { ascending: true }).order('year_level', { ascending: true }).order('semester', { ascending: true }).order('name', { ascending: true }),
         supabase.from('community_posts').select('id', { count: 'exact', head: true }),
         supabase.from('friend_requests').select('id', { count: 'exact', head: true }),
@@ -70,6 +92,18 @@ export function AdminScreen({ uid }: Props) {
       setUsersCount(usersResp.count ?? 0);
       setPostsCount(postsResp.count ?? 0);
       setRequestsCount(requestsResp.count ?? 0);
+
+      setUsers(
+        (usersListResp.data ?? []).map((row) => ({
+          uid: String(row.uid ?? ''),
+          email: String(row.email ?? ''),
+          name: String(row.name ?? ''),
+          major: String(row.major ?? ''),
+          yearLevel: String(row.year_level ?? ''),
+          isAdmin: Boolean(row.is_admin ?? false),
+          selectedCoursesCount: Array.isArray(row.selected_courses) ? row.selected_courses.length : 0,
+        })),
+      );
 
       setCourses(
         (coursesResp.data ?? []).map((row) => ({
@@ -110,6 +144,21 @@ export function AdminScreen({ uid }: Props) {
     }
     return courses.filter((c) => c.name.toLowerCase().includes(s));
   }, [courses, search]);
+
+  const filteredUsers = useMemo(() => {
+    const s = userSearch.trim().toLowerCase();
+    if (!s) {
+      return users;
+    }
+    return users.filter((u) => {
+      return (
+        u.name.toLowerCase().includes(s) ||
+        u.email.toLowerCase().includes(s) ||
+        u.major.toLowerCase().includes(s) ||
+        u.yearLevel.toLowerCase().includes(s)
+      );
+    });
+  }, [users, userSearch]);
 
   const addCourse = async () => {
     if (!supabase || !newCourseName.trim()) {
@@ -180,41 +229,114 @@ export function AdminScreen({ uid }: Props) {
     }
 
     const summary = `${course.major} • Year ${course.yearLevel} • Sem ${course.semester}`;
+    const prompt = `Remove "${course.name}" (${summary})? This cannot be undone.`;
+
+    const runDelete = async () => {
+      if (!supabase) return;
+
+      const { error } = await supabase.from('courses').delete().eq('id', course.id);
+      if (error) {
+        Alert.alert('Unable to delete', error.message);
+        return;
+      }
+
+      setCourses((prev) => prev.filter((c) => c.id !== course.id));
+
+      await supabase.from('admin_activity_logs').insert({
+        admin_uid: uid,
+        action: 'course_deleted',
+        target_type: 'course',
+        target_id: course.id,
+        details: course,
+      });
+
+      Alert.alert('Course deleted', 'The course has been removed.');
+    };
+
+    if (Platform.OS === 'web') {
+      const ok = typeof globalThis.confirm === 'function' ? globalThis.confirm(prompt) : true;
+      if (!ok) {
+        return;
+      }
+      await runDelete();
+      return;
+    }
 
     Alert.alert(
       'Delete course',
-      `Remove "${course.name}" (${summary})? This cannot be undone.`,
+      prompt,
       [
         { text: 'Cancel', style: 'cancel' },
         {
           text: 'Delete',
           style: 'destructive',
           onPress: () => {
-            void (async () => {
-              if (!supabase) return;
-
-              const { error } = await supabase.from('courses').delete().eq('id', course.id);
-              if (error) {
-                Alert.alert('Unable to delete', error.message);
-                return;
-              }
-
-              setCourses((prev) => prev.filter((c) => c.id !== course.id));
-
-              await supabase.from('admin_activity_logs').insert({
-                admin_uid: uid,
-                action: 'course_deleted',
-                target_type: 'course',
-                target_id: course.id,
-                details: course,
-              });
-
-              Alert.alert('Course deleted', 'The course has been removed.');
-            })();
+            void runDelete();
           },
         },
       ],
     );
+  };
+
+  const openEditCourse = (course: AdminCourse) => {
+    setEditingCourse(course);
+    setEditCourseName(course.name);
+    setEditMajor((['BSIT', 'BSCS', 'BSIS'] as Major[]).includes(course.major as Major) ? (course.major as Major) : 'BSIT');
+    setEditYear((['1', '2', '3', '4'] as Year[]).includes(course.yearLevel as Year) ? (course.yearLevel as Year) : '1');
+    setEditSem((['1', '2'] as Semester[]).includes(course.semester as Semester) ? (course.semester as Semester) : '1');
+  };
+
+  const closeEditCourse = () => {
+    setEditingCourse(null);
+    setEditCourseName('');
+    setEditMajor('BSIT');
+    setEditYear('1');
+    setEditSem('1');
+  };
+
+  const saveEditedCourse = async () => {
+    if (!supabase || !editingCourse || !editCourseName.trim()) {
+      return;
+    }
+
+    const nextCourse: AdminCourse = {
+      ...editingCourse,
+      name: editCourseName.trim(),
+      major: editMajor,
+      yearLevel: editYear,
+      semester: editSem,
+    };
+
+    const { error } = await supabase
+      .from('courses')
+      .update({
+        name: nextCourse.name,
+        major: nextCourse.major,
+        year_level: nextCourse.yearLevel,
+        semester: nextCourse.semester,
+      })
+      .eq('id', editingCourse.id);
+
+    if (error) {
+      Alert.alert('Unable to update', error.message);
+      return;
+    }
+
+    setCourses((prev) => prev.map((c) => (c.id === nextCourse.id ? nextCourse : c)));
+
+    await supabase.from('admin_activity_logs').insert({
+      admin_uid: uid,
+      action: 'course_updated',
+      target_type: 'course',
+      target_id: nextCourse.id,
+      details: {
+        before: editingCourse,
+        after: nextCourse,
+      },
+    });
+
+    Alert.alert('Course updated', 'Course details were saved.');
+    closeEditCourse();
   };
 
   if (!isAdmin) {
@@ -271,22 +393,77 @@ export function AdminScreen({ uid }: Props) {
         <Card style={styles.cardGap}>
           <Text style={styles.section}>Courses</Text>
           <AppInput value={search} onChangeText={setSearch} placeholder="Search courses" />
-          <View style={styles.coursesGrid}>
-            {filteredCourses.map((course) => (
-              <View key={course.id} style={styles.courseTile}>
-                <Text style={styles.courseName}>{course.name}</Text>
-                <Text style={styles.courseMeta}>
-                  {course.major} • Year {course.yearLevel} • Sem {course.semester}
-                </Text>
-                <View style={styles.courseActionsRow}>
-                  <AppButton
-                    text="Delete"
-                    variant="danger"
-                    onPress={() => void deleteCourse(course)}
-                  />
+          <View style={styles.coursesContainer}>
+            <ScrollView
+              nestedScrollEnabled
+              showsVerticalScrollIndicator
+              contentContainerStyle={styles.coursesGrid}
+            >
+              {filteredCourses.map((course) => (
+                <View key={course.id} style={styles.courseTile}>
+                  <Text style={styles.courseName}>{course.name}</Text>
+                  <Text style={styles.courseMeta}>
+                    {course.major} • Year {course.yearLevel} • Sem {course.semester}
+                  </Text>
+                  <View style={styles.courseActionsRow}>
+                    <View style={styles.courseActionItem}>
+                      <AppButton
+                        text="Edit"
+                        variant="blue"
+                        onPress={() => openEditCourse(course)}
+                      />
+                    </View>
+                    <View style={styles.courseActionItem}>
+                    <AppButton
+                      text="Delete"
+                      variant="danger"
+                      onPress={() => void deleteCourse(course)}
+                    />
+                    </View>
+                  </View>
                 </View>
+              ))}
+              {filteredCourses.length === 0 ? (
+                <Text style={styles.logMeta}>No courses match your search.</Text>
+              ) : null}
+            </ScrollView>
+          </View>
+        </Card>
+
+        <Card style={styles.cardGap}>
+          <Text style={styles.section}>Users</Text>
+          <AppInput
+            value={userSearch}
+            onChangeText={setUserSearch}
+            placeholder="Search users by name, email, major, year"
+          />
+          <View style={styles.usersContainer}>
+            <ScrollView nestedScrollEnabled showsVerticalScrollIndicator>
+              <View style={styles.userHeaderRow}>
+                <Text style={[styles.userCol, styles.userColMain]}>User</Text>
+                <Text style={[styles.userCol, styles.userColMajor]}>Major/Year</Text>
+                <Text style={[styles.userCol, styles.userColRole]}>Role</Text>
+                <Text style={[styles.userCol, styles.userColCourses]}>Courses</Text>
               </View>
-            ))}
+
+              {filteredUsers.map((user) => (
+                <View key={user.uid} style={styles.userRow}>
+                  <View style={styles.userColMain}>
+                    <Text style={styles.userName}>{user.name || 'Unnamed User'}</Text>
+                    <Text style={styles.userEmail}>{user.email || user.uid}</Text>
+                  </View>
+                  <Text style={[styles.userCol, styles.userColMajor]}>
+                    {(user.major || 'N/A') + ' • Y' + (user.yearLevel || 'N/A')}
+                  </Text>
+                  <Text style={[styles.userCol, styles.userColRole]}>{user.isAdmin ? 'Admin' : 'User'}</Text>
+                  <Text style={[styles.userCol, styles.userColCourses]}>{user.selectedCoursesCount}</Text>
+                </View>
+              ))}
+
+              {filteredUsers.length === 0 ? (
+                <Text style={styles.logMeta}>No users match your search.</Text>
+              ) : null}
+            </ScrollView>
           </View>
         </Card>
 
@@ -302,6 +479,51 @@ export function AdminScreen({ uid }: Props) {
           {logs.length === 0 ? <Text style={styles.logMeta}>No activity yet.</Text> : null}
         </Card>
       </ScrollView>
+
+      <Modal
+        visible={Boolean(editingCourse)}
+        transparent
+        animationType="fade"
+        onRequestClose={closeEditCourse}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <Text style={styles.section}>Edit Course</Text>
+            <AppInput
+              value={editCourseName}
+              onChangeText={setEditCourseName}
+              placeholder="Course name"
+            />
+            <View style={styles.inlineRow}>
+              {(['BSIT', 'BSCS', 'BSIS'] as Major[]).map((m) => (
+                <Pressable key={`edit-major-${m}`} onPress={() => setEditMajor(m)}>
+                  <Badge text={m} active={editMajor === m} />
+                </Pressable>
+              ))}
+            </View>
+            <View style={styles.inlineRow}>
+              {(['1', '2', '3', '4'] as Year[]).map((y) => (
+                <Pressable key={`edit-year-${y}`} onPress={() => setEditYear(y)}>
+                  <Badge text={`Y${y}`} active={editYear === y} />
+                </Pressable>
+              ))}
+              {(['1', '2'] as Semester[]).map((s) => (
+                <Pressable key={`edit-sem-${s}`} onPress={() => setEditSem(s)}>
+                  <Badge text={`S${s}`} active={editSem === s} />
+                </Pressable>
+              ))}
+            </View>
+            <View style={styles.modalActionsRow}>
+              <View style={styles.modalActionItem}>
+                <AppButton text="Cancel" variant="outline" onPress={closeEditCourse} />
+              </View>
+              <View style={styles.modalActionItem}>
+                <AppButton text="Save" variant="blue" onPress={() => void saveEditedCourse()} />
+              </View>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </Screen>
   );
 }
@@ -349,11 +571,71 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
     marginTop: 6,
   },
+  coursesContainer: {
+    maxHeight: 420,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 14,
+    padding: 8,
+    backgroundColor: '#f9fafb',
+  },
+  usersContainer: {
+    maxHeight: 340,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 14,
+    padding: 8,
+    backgroundColor: '#f9fafb',
+  },
+  userHeaderRow: {
+    flexDirection: 'row',
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+    paddingBottom: 6,
+    marginBottom: 4,
+  },
+  userRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+    paddingVertical: 8,
+  },
+  userCol: {
+    color: colors.textBody,
+    fontSize: 12,
+  },
+  userColMain: {
+    flex: 2,
+  },
+  userColMajor: {
+    flex: 1.3,
+  },
+  userColRole: {
+    flex: 1,
+    fontWeight: '700',
+  },
+  userColCourses: {
+    flex: 0.7,
+    textAlign: 'right',
+    fontWeight: '700',
+  },
+  userName: {
+    color: colors.textStrong,
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  userEmail: {
+    color: colors.textMuted,
+    fontSize: 11,
+    marginTop: 2,
+  },
   coursesGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 8,
-    marginTop: 4,
+    marginTop: 2,
+    paddingBottom: 4,
   },
   courseTile: {
     width: '48%',
@@ -373,7 +655,32 @@ const styles = StyleSheet.create({
   },
   courseActionsRow: {
     marginTop: 8,
-    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    gap: 8,
+  },
+  courseActionItem: {
+    flex: 1,
+  },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    justifyContent: 'center',
+    padding: 18,
+  },
+  modalCard: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 14,
+    backgroundColor: colors.white,
+    padding: 14,
+  },
+  modalActionsRow: {
+    marginTop: 8,
+    flexDirection: 'row',
+    gap: 8,
+  },
+  modalActionItem: {
+    flex: 1,
   },
   logRow: {
     borderWidth: 1,

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { getUserProfile, supabase } from '../lib/supabase';
 import { AppButton, AppInput, Card, Heading, Screen, Subheading } from '../ui/components';
 import { colors } from '../ui/theme';
@@ -22,6 +22,7 @@ export function FindMentorScreen({ uid }: Props) {
   const [connectedIds, setConnectedIds] = useState<Record<string, boolean>>({});
   const [courseFilter, setCourseFilter] = useState('all');
   const [coursePickerOpen, setCoursePickerOpen] = useState(false);
+  const [selectedMentor, setSelectedMentor] = useState<Mentor | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -258,7 +259,7 @@ export function FindMentorScreen({ uid }: Props) {
                 <AppButton
                   text="View Profile"
                   variant="outline"
-                  onPress={() => Alert.alert('Profile', 'Profile details are not implemented in this prototype.')}
+                  onPress={() => setSelectedMentor(mentor)}
                 />
               </View>
             </View>
@@ -267,6 +268,37 @@ export function FindMentorScreen({ uid }: Props) {
 
         {filtered.length === 0 ? <Text style={styles.empty}>No mentors found right now.</Text> : null}
       </ScrollView>
+
+      <Modal
+        visible={Boolean(selectedMentor)}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setSelectedMentor(null)}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Mentor Profile</Text>
+            {selectedMentor ? (
+              <>
+                <Text style={styles.modalName}>{selectedMentor.name}</Text>
+                <Text style={styles.modalMeta}>{selectedMentor.major || 'No major listed'}</Text>
+                <Text style={styles.modalSectionTitle}>Bio</Text>
+                <Text style={styles.modalBody}>{selectedMentor.bio || 'No bio added yet.'}</Text>
+                <Text style={styles.modalSectionTitle}>Courses</Text>
+                <Text style={styles.modalBody}>
+                  {selectedMentor.courses.join(' • ') || 'No course listed'}
+                </Text>
+              </>
+            ) : null}
+
+            <View style={styles.modalActions}>
+              <View style={styles.actionPrimary}>
+                <AppButton text="Close" variant="reject" onPress={() => setSelectedMentor(null)} />
+              </View>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </Screen>
   );
 }
@@ -376,5 +408,48 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     color: colors.textMuted,
     marginTop: 20,
+  },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.45)',
+    justifyContent: 'center',
+    padding: 20,
+  },
+  modalCard: {
+    backgroundColor: colors.white,
+    borderRadius: 18,
+    padding: 18,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  modalTitle: {
+    color: colors.textStrong,
+    fontSize: 18,
+    fontWeight: '800',
+    marginBottom: 12,
+  },
+  modalName: {
+    color: colors.textStrong,
+    fontSize: 20,
+    fontWeight: '800',
+  },
+  modalMeta: {
+    color: colors.textMuted,
+    marginTop: 2,
+    marginBottom: 10,
+  },
+  modalSectionTitle: {
+    color: colors.textStrong,
+    fontSize: 13,
+    fontWeight: '700',
+    marginTop: 8,
+    marginBottom: 4,
+  },
+  modalBody: {
+    color: colors.textBody,
+    lineHeight: 20,
+  },
+  modalActions: {
+    marginTop: 14,
   },
 });

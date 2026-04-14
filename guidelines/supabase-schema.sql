@@ -16,6 +16,7 @@ create table if not exists public.users (
   selected_courses text[] not null default '{}',
   course_roles jsonb not null default '{}'::jsonb,
   has_seen_onboarding boolean not null default false,
+  notifications_last_seen_at timestamptz,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -25,6 +26,9 @@ alter table public.users
 
 alter table public.users
   add column if not exists is_admin boolean not null default false;
+
+alter table public.users
+  add column if not exists notifications_last_seen_at timestamptz;
 
 create table if not exists public.conversations (
   id uuid primary key default gen_random_uuid(),
@@ -260,6 +264,32 @@ create table if not exists public.direct_messages (
   created_at timestamptz not null default now()
 );
 
+create table if not exists public.study_group_requests (
+  id uuid primary key default gen_random_uuid(),
+  group_id uuid not null references public.study_groups(id) on delete cascade,
+  requester_id text not null references public.users(uid) on delete cascade,
+  status text not null default 'pending' check (status in ('pending','accepted','declined')),
+  created_at timestamptz not null default now(),
+  responded_at timestamptz
+);
+
+create table if not exists public.study_group_messages (
+  id uuid primary key default gen_random_uuid(),
+  group_id uuid not null references public.study_groups(id) on delete cascade,
+  sender_id text not null references public.users(uid) on delete cascade,
+  sender_name text not null,
+  text text not null,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists public.study_group_read_states (
+  group_id uuid not null references public.study_groups(id) on delete cascade,
+  user_id text not null references public.users(uid) on delete cascade,
+  last_seen_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  primary key (group_id, user_id)
+);
+
 insert into storage.buckets (id, name, public)
 values ('avatars', 'avatars', true)
 on conflict (id) do update
@@ -277,6 +307,11 @@ create index if not exists idx_admin_logs_created on public.admin_activity_logs(
 create index if not exists idx_admin_logs_admin on public.admin_activity_logs(admin_uid, created_at desc);
 create index if not exists idx_buddies_owner on public.buddies(owner_id, added_at desc);
 create index if not exists idx_groups_members on public.study_groups using gin(member_ids);
+create index if not exists idx_group_requests_group on public.study_group_requests(group_id, status, created_at desc);
+create index if not exists idx_group_requests_requester on public.study_group_requests(requester_id, status, created_at desc);
+create index if not exists idx_group_messages_group on public.study_group_messages(group_id, created_at asc);
+create index if not exists idx_group_read_states_group on public.study_group_read_states(group_id, last_seen_at desc);
+create index if not exists idx_group_read_states_user on public.study_group_read_states(user_id, updated_at desc);
 create index if not exists idx_friend_requests_target on public.friend_requests(target_id, status, created_at desc);
 create index if not exists idx_friend_requests_requester on public.friend_requests(requester_id, created_at desc);
 create index if not exists idx_direct_messages_pair on public.direct_messages(sender_id, recipient_id, created_at desc);
@@ -293,6 +328,9 @@ alter table public.user_courses enable row level security;
 alter table public.admin_activity_logs enable row level security;
 alter table public.buddies enable row level security;
 alter table public.study_groups enable row level security;
+alter table public.study_group_requests enable row level security;
+alter table public.study_group_messages enable row level security;
+alter table public.study_group_read_states enable row level security;
 alter table public.friend_requests enable row level security;
 alter table public.direct_messages enable row level security;
 
@@ -459,6 +497,114 @@ drop policy if exists groups_owner_write on public.study_groups;
 create policy groups_owner_write on public.study_groups for all to authenticated
   using (owner_id = auth.uid()::text)
   with check (owner_id = auth.uid()::text);
+
+drop policy if exists groups_members_update on public.study_groups;
+create policy groups_members_update on public.study_groups for update to authenticated
+  using (
+    owner_id = auth.uid()::text
+    or auth.uid()::text = any(member_ids)
+  )
+  with check (true);
+
+drop policy if exists group_requests_insert_own on public.study_group_requests;
+create policy group_requests_insert_own on public.study_group_requests for insert to authenticated
+  with check (requester_id = auth.uid()::text);
+
+drop policy if exists group_requests_select_requester on public.study_group_requests;
+create policy group_requests_select_requester on public.study_group_requests for select to authenticated
+  using (requester_id = auth.uid()::text);
+
+drop policy if exists group_requests_select_owner on public.study_group_requests;
+create policy group_requests_select_owner on public.study_group_requests for select to authenticated
+  using (
+    exists (
+      select 1
+      from public.study_groups g
+      where g.id = study_group_requests.group_id
+        and g.owner_id = auth.uid()::text
+    )
+  );
+
+drop policy if exists group_requests_update_owner on public.study_group_requests;
+create policy group_requests_update_owner on public.study_group_requests for update to authenticated
+  using (
+    exists (
+      select 1
+      from public.study_groups g
+      where g.id = study_group_requests.group_id
+        and g.owner_id = auth.uid()::text
+    )
+  )
+  with check (
+    exists (
+      select 1
+      from public.study_groups g
+      where g.id = study_group_requests.group_id
+        and g.owner_id = auth.uid()::text
+    )
+  );
+
+drop policy if exists group_messages_select_members on public.study_group_messages;
+create policy group_messages_select_members on public.study_group_messages for select to authenticated
+  using (
+    exists (
+      select 1
+      from public.study_groups g
+      where g.id = study_group_messages.group_id
+        and (
+          g.owner_id = auth.uid()::text
+          or auth.uid()::text = any(g.member_ids)
+        )
+    )
+  );
+
+drop policy if exists group_messages_insert_members on public.study_group_messages;
+create policy group_messages_insert_members on public.study_group_messages for insert to authenticated
+  with check (
+    exists (
+      select 1
+      from public.study_groups g
+      where g.id = study_group_messages.group_id
+        and (
+          g.owner_id = auth.uid()::text
+          or auth.uid()::text = any(g.member_ids)
+        )
+    )
+  );
+
+drop policy if exists group_read_states_select_members on public.study_group_read_states;
+create policy group_read_states_select_members on public.study_group_read_states for select to authenticated
+  using (
+    exists (
+      select 1
+      from public.study_groups g
+      where g.id = study_group_read_states.group_id
+        and (
+          g.owner_id = auth.uid()::text
+          or auth.uid()::text = any(g.member_ids)
+        )
+    )
+  );
+
+drop policy if exists group_read_states_upsert_own on public.study_group_read_states;
+create policy group_read_states_upsert_own on public.study_group_read_states for insert to authenticated
+  with check (
+    user_id = auth.uid()::text
+    and exists (
+      select 1
+      from public.study_groups g
+      where g.id = study_group_read_states.group_id
+        and (
+          g.owner_id = auth.uid()::text
+          or auth.uid()::text = any(g.member_ids)
+        )
+    )
+  );
+
+drop policy if exists group_read_states_update_own on public.study_group_read_states;
+create policy group_read_states_update_own on public.study_group_read_states for update to authenticated
+  using (user_id = auth.uid()::text)
+  with check (user_id = auth.uid()::text);
 
 drop policy if exists friend_requests_select on public.friend_requests;
 create policy friend_requests_select on public.friend_requests for select to authenticated

@@ -4,6 +4,7 @@ import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { StatusBar } from 'expo-status-bar';
+import MaterialCommunityIcons from '@expo/vector-icons/build/MaterialCommunityIcons';
 import { LoginScreen } from './src/screens/LoginScreen';
 import { RegisterScreen } from './src/screens/RegisterScreen';
 import { CourseSelectionScreen } from './src/screens/CourseSelectionScreen';
@@ -69,43 +70,291 @@ type HomeTabsProps = {
   onManageCourses: () => void;
 };
 
+function toBadgeText(count: number): string {
+  if (count > 99) {
+    return '99+';
+  }
+  return String(count);
+}
+
 function HomeTabs({ uid, onLogout, onOpenAdmin, onManageCourses }: HomeTabsProps) {
+  const [unreadMessageCount, setUnreadMessageCount] = useState(0);
+  const [unreadAlertCount, setUnreadAlertCount] = useState(0);
+
+  useEffect(() => {
+    if (!supabase || !uid) {
+      setUnreadMessageCount(0);
+      setUnreadAlertCount(0);
+      return;
+    }
+
+    const client = supabase;
+    let active = true;
+
+    const loadUnreadCounts = async () => {
+      const [directUnreadResp, groupsResp, meResp, friendReqResp, incomingGroupReqResp, myGroupReqResp, ownPostsResp] = await Promise.all([
+        client
+          .from('direct_messages')
+          .select('id', { count: 'exact', head: true })
+          .eq('recipient_id', uid)
+          .eq('is_read', false),
+        client
+          .from('study_groups')
+          .select('id,owner_id,member_ids'),
+        client
+          .from('users')
+          .select('notifications_last_seen_at')
+          .eq('uid', uid)
+          .maybeSingle(),
+        client
+          .from('friend_requests')
+          .select('id,created_at')
+          .eq('target_id', uid)
+          .eq('status', 'pending')
+          .order('created_at', { ascending: false }),
+        client
+          .from('study_group_requests')
+          .select('id,created_at')
+          .eq('status', 'pending')
+          .order('created_at', { ascending: false }),
+        client
+          .from('study_group_requests')
+          .select('id,created_at')
+          .eq('requester_id', uid)
+          .neq('status', 'pending')
+          .order('created_at', { ascending: false }),
+        client
+          .from('community_posts')
+          .select('id')
+          .eq('author_id', uid),
+      ]);
+
+      if (
+        !active ||
+        directUnreadResp.error ||
+        groupsResp.error ||
+        meResp.error ||
+        friendReqResp.error ||
+        incomingGroupReqResp.error ||
+        myGroupReqResp.error ||
+        ownPostsResp.error
+      ) {
+        return;
+      }
+
+      const directUnread = Number(directUnreadResp.count ?? 0);
+
+      const myGroupIds = (groupsResp.data ?? [])
+        .filter((row) => {
+          const ownerId = String((row as { owner_id?: unknown }).owner_id ?? '');
+          if (ownerId === uid) {
+            return true;
+          }
+          const memberIdsRaw = (row as { member_ids?: unknown }).member_ids;
+          const memberIds = Array.isArray(memberIdsRaw)
+            ? memberIdsRaw.map((item: unknown) => String(item))
+            : [];
+          return memberIds.includes(uid);
+        })
+        .map((row) => String((row as { id?: unknown }).id ?? ''))
+        .filter((id) => id.length > 0);
+
+      let groupUnread = 0;
+
+      if (myGroupIds.length > 0) {
+        const [readsResp, groupMsgsResp] = await Promise.all([
+          client
+            .from('study_group_read_states')
+            .select('group_id,last_seen_at')
+            .eq('user_id', uid)
+            .in('group_id', myGroupIds),
+          client
+            .from('study_group_messages')
+            .select('group_id,created_at,sender_id')
+            .in('group_id', myGroupIds)
+            .neq('sender_id', uid)
+            .order('created_at', { ascending: false })
+            .limit(1000),
+        ]);
+
+        if (!readsResp.error && !groupMsgsResp.error) {
+          const lastSeenByGroup = new Map<string, number>();
+          for (const row of readsResp.data ?? []) {
+            const groupId = String((row as { group_id?: unknown }).group_id ?? '');
+            const seenAtIso = String((row as { last_seen_at?: unknown }).last_seen_at ?? '');
+            const seenAt = Date.parse(seenAtIso);
+            if (groupId && Number.isFinite(seenAt)) {
+              lastSeenByGroup.set(groupId, seenAt);
+            }
+          }
+
+          groupUnread = (groupMsgsResp.data ?? []).filter((row) => {
+            const groupId = String((row as { group_id?: unknown }).group_id ?? '');
+            const createdAtIso = String((row as { created_at?: unknown }).created_at ?? '');
+            const createdAt = Date.parse(createdAtIso);
+            if (!groupId || !Number.isFinite(createdAt)) {
+              return false;
+            }
+            const lastSeen = lastSeenByGroup.get(groupId);
+            if (lastSeen === undefined) {
+              return true;
+            }
+            return createdAt > lastSeen;
+          }).length;
+        }
+      }
+
+      const notificationsLastSeenAt = String(
+        (meResp.data as { notifications_last_seen_at?: unknown } | null)?.notifications_last_seen_at ?? '',
+      );
+      const notificationsSeenTs = Date.parse(notificationsLastSeenAt);
+      const hasSeenTs = Number.isFinite(notificationsSeenTs);
+
+      const isNewAlert = (createdAtIso: string) => {
+        if (!hasSeenTs) {
+          return true;
+        }
+        const createdAt = Date.parse(createdAtIso);
+        return Number.isFinite(createdAt) && createdAt > notificationsSeenTs;
+      };
+
+      const ownPostIds = (ownPostsResp.data ?? [])
+        .map((row) => String((row as { id?: unknown }).id ?? ''))
+        .filter((id) => id.length > 0);
+
+      let postActivityUnread = 0;
+      if (ownPostIds.length > 0) {
+        const [likesResp, commentsResp] = await Promise.all([
+          client
+            .from('community_post_likes')
+            .select('created_at,user_id')
+            .in('post_id', ownPostIds)
+            .neq('user_id', uid)
+            .order('created_at', { ascending: false }),
+          client
+            .from('community_post_comments')
+            .select('created_at,author_id')
+            .in('post_id', ownPostIds)
+            .neq('author_id', uid)
+            .order('created_at', { ascending: false }),
+        ]);
+
+        if (!likesResp.error && !commentsResp.error) {
+          const likeUnread = (likesResp.data ?? []).filter((row) => {
+            const createdAtIso = String((row as { created_at?: unknown }).created_at ?? '');
+            return isNewAlert(createdAtIso);
+          }).length;
+
+          const commentUnread = (commentsResp.data ?? []).filter((row) => {
+            const createdAtIso = String((row as { created_at?: unknown }).created_at ?? '');
+            return isNewAlert(createdAtIso);
+          }).length;
+
+          postActivityUnread = likeUnread + commentUnread;
+        }
+      }
+
+      const friendReqUnread = (friendReqResp.data ?? []).filter((row) => {
+        const createdAtIso = String((row as { created_at?: unknown }).created_at ?? '');
+        return isNewAlert(createdAtIso);
+      }).length;
+
+      const incomingGroupReqUnread = (incomingGroupReqResp.data ?? []).filter((row) => {
+        const createdAtIso = String((row as { created_at?: unknown }).created_at ?? '');
+        return isNewAlert(createdAtIso);
+      }).length;
+
+      const groupUpdatesUnread = (myGroupReqResp.data ?? []).filter((row) => {
+        const createdAtIso = String((row as { created_at?: unknown }).created_at ?? '');
+        return isNewAlert(createdAtIso);
+      }).length;
+
+      if (!active) {
+        return;
+      }
+
+      setUnreadMessageCount(directUnread + groupUnread);
+      setUnreadAlertCount(friendReqUnread + postActivityUnread + incomingGroupReqUnread + groupUpdatesUnread);
+    };
+
+    void loadUnreadCounts();
+    const id = setInterval(() => {
+      void loadUnreadCounts();
+    }, 5000);
+
+    return () => {
+      active = false;
+      clearInterval(id);
+    };
+  }, [uid]);
+
   return (
     <Tabs.Navigator
       screenOptions={({ route }) => ({
-        headerStyle: { backgroundColor: '#fef3c7' },
-        headerTitleStyle: { color: '#14532d', fontWeight: '700' },
+        headerStyle: { backgroundColor: '#fef3c7', elevation: 2 },
+        headerTitleStyle: { color: '#14532d', fontWeight: '900', fontSize: 18 },
         tabBarStyle: {
           backgroundColor: '#ffffff',
           borderTopColor: '#d1d5db',
-          height: 62,
-          paddingBottom: 6,
+          borderTopWidth: 1,
+          height: 68,
+          paddingBottom: 8,
           paddingTop: 4,
+          elevation: 8,
+          shadowColor: '#000',
+          shadowOpacity: 0.1,
+          shadowRadius: 12,
+          shadowOffset: { width: 0, height: -4 },
         },
-        tabBarActiveTintColor: '#166534',
-        tabBarInactiveTintColor: '#6b7280',
-        tabBarLabelStyle: { fontSize: 11, fontWeight: '700' },
+        tabBarActiveTintColor: '#16a34a',
+        tabBarInactiveTintColor: '#9ca3af',
+        tabBarLabelStyle: { fontSize: 11, fontWeight: '700', marginTop: 4 },
+        tabBarBadgeStyle: {
+          backgroundColor: '#dc2626',
+          color: '#ffffff',
+          fontSize: 10,
+          fontWeight: '700',
+          borderRadius: 10,
+        },
         tabBarIcon: ({ color, size, focused }) => {
-          const iconByRoute: Record<string, string> = {
-            Community: '🏠',
-            Messages: '💬',
-            Alerts: '🔔',
-            Mentors: '🔎',
-            Buddies: '👥',
-            Profile: '🙍',
+          const iconMap: Record<string, string> = {
+            Community: 'home-outline',
+            Messages: 'chat-outline',
+            Alerts: 'bell-outline',
+            Mentors: 'school-outline',
+            Buddies: 'account-multiple-outline',
+            Profile: 'account-circle-outline',
           };
 
-          return <Text style={{ fontSize: size, color }}>{iconByRoute[route.name]}</Text>;
+          return (
+            <MaterialCommunityIcons
+              name={iconMap[route.name] as keyof typeof MaterialCommunityIcons.glyphMap}
+              size={size}
+              color={color}
+            />
+          );
         },
       })}
     >
       <Tabs.Screen name="Community" options={{ title: 'Community' }}>
         {() => <CommunityScreen uid={uid} />}
       </Tabs.Screen>
-      <Tabs.Screen name="Messages" options={{ title: 'Messages' }}>
+      <Tabs.Screen
+        name="Messages"
+        options={{
+          title: 'Messages',
+          tabBarBadge: unreadMessageCount > 0 ? toBadgeText(unreadMessageCount) : undefined,
+        }}
+      >
         {() => <MessagesScreen uid={uid} />}
       </Tabs.Screen>
-      <Tabs.Screen name="Alerts" options={{ title: 'Alerts' }}>
+      <Tabs.Screen
+        name="Alerts"
+        options={{
+          title: 'Alerts',
+          tabBarBadge: unreadAlertCount > 0 ? toBadgeText(unreadAlertCount) : undefined,
+        }}
+      >
         {() => <NotificationsScreen uid={uid} />}
       </Tabs.Screen>
       <Tabs.Screen name="Mentors" options={{ title: 'Find Mentor' }}>

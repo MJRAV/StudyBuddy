@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Alert, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
-import { ensureUserProfile, isSupabaseConfigured, supabase } from '../lib/supabase';
+import { isSupabaseConfigured, supabase } from '../lib/supabase';
 import { AppButton, AppInput, Card, Heading, Screen, Subheading } from '../ui/components';
 import { colors } from '../ui/theme';
 
@@ -35,11 +35,40 @@ export function LoginScreen({ navigation }: Props) {
         throw new Error('Login succeeded but no user returned.');
       }
 
-      await ensureUserProfile(
-        user.id,
-        user.email ?? email.trim(),
-        typeof user.user_metadata?.display_name === 'string' ? user.user_metadata.display_name : '',
-      );
+      const { data: meData, error: meError } = await supabase
+        .from('users')
+        .select('suspended_until,is_deleted')
+        .eq('uid', user.id)
+        .maybeSingle();
+
+      if (meError) {
+        await supabase.auth.signOut({ scope: 'local' });
+        console.warn('Unable to read timeout/deleted flags during login', meError);
+        Alert.alert('Sign in blocked', 'Unable to verify account status right now. Please try again in a moment.');
+        return;
+      }
+
+      if (!meData) {
+        await supabase.auth.signOut({ scope: 'local' });
+        Alert.alert('Account unavailable', 'This account no longer exists. Please contact an admin.');
+        return;
+      }
+
+      const suspendedUntilIso = String((meData as { suspended_until?: unknown } | null)?.suspended_until ?? '');
+      const suspendedUntilTs = Date.parse(suspendedUntilIso);
+      const isTimedOut = Number.isFinite(suspendedUntilTs) && suspendedUntilTs > Date.now();
+      const isDeleted = Boolean((meData as { is_deleted?: unknown } | null)?.is_deleted);
+
+      if (isDeleted || isTimedOut) {
+        await supabase.auth.signOut({ scope: 'local' });
+        Alert.alert(
+          'Account disabled',
+          isDeleted
+            ? 'This account has been disabled by an administrator.'
+            : `Your account is temporarily disabled until ${new Date(suspendedUntilTs).toLocaleString()}.`,
+        );
+        return;
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unable to sign in.';
       Alert.alert('Sign in failed', message);
