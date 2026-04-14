@@ -4,6 +4,7 @@ import { supabase } from '../lib/supabase';
 import type { Major, Semester, Year } from '../lib/courseCatalog';
 import { AppButton, AppInput, Badge, Card, Heading, Screen, Subheading } from '../ui/components';
 import { colors } from '../ui/theme';
+import { useToast } from '../ui/toast';
 
 type AdminCourse = {
   id: string;
@@ -21,6 +22,17 @@ type AdminLog = {
   createdAt: string;
 };
 
+type AdminReport = {
+  id: string;
+  reporterUid: string;
+  targetType: string;
+  targetId: string;
+  reason: string;
+  details: string;
+  status: 'open' | 'reviewed' | 'resolved' | 'dismissed';
+  createdAt: string;
+};
+
 type AdminUser = {
   uid: string;
   email: string;
@@ -29,6 +41,17 @@ type AdminUser = {
   yearLevel: string;
   isAdmin: boolean;
   selectedCoursesCount: number;
+  suspensionLevel: string;
+  suspensionReason: string;
+  suspendedUntil: string;
+};
+
+type SuspensionLevel = 'light' | 'moderate' | 'severe';
+
+const SUSPENSION_DURATIONS_MINUTES: Record<SuspensionLevel, number> = {
+  light: 24 * 60,
+  moderate: 3 * 24 * 60,
+  severe: 7 * 24 * 60,
 };
 
 type Props = {
@@ -36,6 +59,7 @@ type Props = {
 };
 
 export function AdminScreen({ uid }: Props) {
+  const { showToast } = useToast();
   const [isAdmin, setIsAdmin] = useState(false);
   const [usersCount, setUsersCount] = useState(0);
   const [users, setUsers] = useState<AdminUser[]>([]);
@@ -43,6 +67,7 @@ export function AdminScreen({ uid }: Props) {
   const [postsCount, setPostsCount] = useState(0);
   const [requestsCount, setRequestsCount] = useState(0);
   const [logs, setLogs] = useState<AdminLog[]>([]);
+  const [reports, setReports] = useState<AdminReport[]>([]);
 
   const [newCourseName, setNewCourseName] = useState('');
   const [newMajor, setNewMajor] = useState<Major>('BSIT');
@@ -53,6 +78,13 @@ export function AdminScreen({ uid }: Props) {
   const [editMajor, setEditMajor] = useState<Major>('BSIT');
   const [editYear, setEditYear] = useState<Year>('1');
   const [editSem, setEditSem] = useState<Semester>('1');
+  const [actingUserId, setActingUserId] = useState('');
+  const [suspendTargetUser, setSuspendTargetUser] = useState<AdminUser | null>(null);
+  const [suspendLevel, setSuspendLevel] = useState<SuspensionLevel>('light');
+  const [suspendReason, setSuspendReason] = useState('');
+  const [suspendingUserId, setSuspendingUserId] = useState('');
+  const [actingReportId, setActingReportId] = useState('');
+  const [selectedReport, setSelectedReport] = useState<AdminReport | null>(null);
 
   const [search, setSearch] = useState('');
   const [userSearch, setUserSearch] = useState('');
@@ -65,18 +97,19 @@ export function AdminScreen({ uid }: Props) {
         return;
       }
 
-      const [meResp, usersResp, usersListResp, coursesResp, postsResp, requestsResp, logsResp] = await Promise.all([
+      const [meResp, usersResp, usersListResp, coursesResp, postsResp, requestsResp, logsResp, reportsResp] = await Promise.all([
         supabase.from('users').select('is_admin').eq('uid', uid).maybeSingle(),
         supabase.from('users').select('uid', { count: 'exact', head: true }),
         supabase
           .from('users')
-          .select('uid,email,name,major,year_level,is_admin,selected_courses')
+          .select('uid,email,name,major,year_level,is_admin,selected_courses,suspension_level,suspension_reason,suspended_until')
           .order('created_at', { ascending: false })
           .limit(250),
         supabase.from('courses').select('id,name,major,year_level,semester', { count: 'exact' }).order('major', { ascending: true }).order('year_level', { ascending: true }).order('semester', { ascending: true }).order('name', { ascending: true }),
         supabase.from('community_posts').select('id', { count: 'exact', head: true }),
         supabase.from('friend_requests').select('id', { count: 'exact', head: true }),
         supabase.from('admin_activity_logs').select('id,action,target_type,target_id,created_at').order('created_at', { ascending: false }).limit(30),
+        supabase.from('reports').select('id,reporter_uid,target_type,target_id,reason,details,status,created_at').order('created_at', { ascending: false }).limit(80),
       ]);
 
       if (!active || meResp.error) {
@@ -102,6 +135,9 @@ export function AdminScreen({ uid }: Props) {
           yearLevel: String(row.year_level ?? ''),
           isAdmin: Boolean(row.is_admin ?? false),
           selectedCoursesCount: Array.isArray(row.selected_courses) ? row.selected_courses.length : 0,
+          suspensionLevel: String(row.suspension_level ?? ''),
+          suspensionReason: String(row.suspension_reason ?? ''),
+          suspendedUntil: String(row.suspended_until ?? ''),
         })),
       );
 
@@ -121,6 +157,19 @@ export function AdminScreen({ uid }: Props) {
           action: String(row.action ?? ''),
           targetType: String(row.target_type ?? ''),
           targetId: String(row.target_id ?? ''),
+          createdAt: String(row.created_at ?? ''),
+        })),
+      );
+
+      setReports(
+        (reportsResp.data ?? []).map((row) => ({
+          id: String(row.id ?? ''),
+          reporterUid: String(row.reporter_uid ?? ''),
+          targetType: String(row.target_type ?? ''),
+          targetId: String(row.target_id ?? ''),
+          reason: String(row.reason ?? ''),
+          details: String(row.details ?? ''),
+          status: String(row.status ?? 'open') as AdminReport['status'],
           createdAt: String(row.created_at ?? ''),
         })),
       );
@@ -159,6 +208,11 @@ export function AdminScreen({ uid }: Props) {
       );
     });
   }, [users, userSearch]);
+
+  const openReports = useMemo(
+    () => reports.filter((item) => item.status === 'open' || item.status === 'reviewed'),
+    [reports],
+  );
 
   const addCourse = async () => {
     if (!supabase || !newCourseName.trim()) {
@@ -215,7 +269,7 @@ export function AdminScreen({ uid }: Props) {
                 details: inserted,
               });
 
-              Alert.alert('Course added', 'The course has been created.');
+              showToast('Course added successfully.', { variant: 'success' });
             })();
           },
         },
@@ -250,7 +304,7 @@ export function AdminScreen({ uid }: Props) {
         details: course,
       });
 
-      Alert.alert('Course deleted', 'The course has been removed.');
+      showToast('Course deleted successfully.', { variant: 'success' });
     };
 
     if (Platform.OS === 'web') {
@@ -335,8 +389,319 @@ export function AdminScreen({ uid }: Props) {
       },
     });
 
-    Alert.alert('Course updated', 'Course details were saved.');
+    showToast('Course updated successfully.', { variant: 'success' });
     closeEditCourse();
+  };
+
+  const toggleUserAdmin = async (user: AdminUser) => {
+    if (!supabase || !user.uid || user.uid === uid) {
+      return;
+    }
+
+    const makeAdmin = !user.isAdmin;
+    const actionWord = makeAdmin ? 'Promote' : 'Demote';
+    const roleLabel = makeAdmin ? 'admin' : 'regular user';
+    const prompt = `${actionWord} ${user.name || user.email || user.uid} to ${roleLabel}?`;
+
+    const runToggle = async () => {
+      if (!supabase) return;
+      setActingUserId(user.uid);
+
+      const { error } = await supabase
+        .from('users')
+        .update({ is_admin: makeAdmin })
+        .eq('uid', user.uid);
+
+      if (error) {
+        const hint = error.message?.toLowerCase().includes('policy')
+          ? ' Check RLS policy for admin user updates.'
+          : '';
+        Alert.alert('Unable to update role', `${error.message ?? 'Unknown error'}${hint}`);
+        setActingUserId('');
+        return;
+      }
+
+      setUsers((prev) =>
+        prev.map((item) =>
+          item.uid === user.uid
+            ? {
+                ...item,
+                isAdmin: makeAdmin,
+              }
+            : item,
+        ),
+      );
+
+      await supabase.from('admin_activity_logs').insert({
+        admin_uid: uid,
+        action: makeAdmin ? 'user_promoted_admin' : 'user_demoted_admin',
+        target_type: 'user',
+        target_id: user.uid,
+        details: {
+          previous_is_admin: user.isAdmin,
+          next_is_admin: makeAdmin,
+        },
+      });
+
+      setActingUserId('');
+      showToast(`${user.name || user.email || user.uid} is now ${roleLabel}.`, { variant: 'success' });
+    };
+
+    if (Platform.OS === 'web') {
+      const ok = typeof globalThis.confirm === 'function' ? globalThis.confirm(prompt) : true;
+      if (!ok) {
+        return;
+      }
+      await runToggle();
+      return;
+    }
+
+    Alert.alert(actionWord, prompt, [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: actionWord,
+        style: 'default',
+        onPress: () => {
+          void runToggle();
+        },
+      },
+    ]);
+  };
+
+  const isSuspended = (user: AdminUser): boolean => {
+    if (!user.suspendedUntil) {
+      return false;
+    }
+    const untilTs = Date.parse(user.suspendedUntil);
+    if (!Number.isFinite(untilTs)) {
+      return false;
+    }
+    return untilTs > Date.now();
+  };
+
+  const formatSuspensionLevel = (value: string): string => {
+    if (!value) {
+      return 'Unknown';
+    }
+    return value.charAt(0).toUpperCase() + value.slice(1).toLowerCase();
+  };
+
+  const openSuspendModal = (user: AdminUser) => {
+    setSuspendTargetUser(user);
+    setSuspendLevel('light');
+    setSuspendReason('');
+  };
+
+  const closeSuspendModal = () => {
+    setSuspendTargetUser(null);
+    setSuspendLevel('light');
+    setSuspendReason('');
+  };
+
+  const applySuspension = async () => {
+    if (!supabase || !suspendTargetUser || !suspendReason.trim()) {
+      return;
+    }
+
+    const durationMinutes = SUSPENSION_DURATIONS_MINUTES[suspendLevel];
+    const untilTs = Date.now() + durationMinutes * 60 * 1000;
+    const suspendedUntilIso = new Date(untilTs).toISOString();
+    const target = suspendTargetUser;
+
+    setSuspendingUserId(target.uid);
+
+    const { error } = await supabase
+      .from('users')
+      .update({
+        suspension_level: suspendLevel,
+        suspension_reason: suspendReason.trim(),
+        suspended_until: suspendedUntilIso,
+      })
+      .eq('uid', target.uid);
+
+    if (error) {
+      Alert.alert('Unable to suspend user', error.message);
+      setSuspendingUserId('');
+      return;
+    }
+
+    setUsers((prev) =>
+      prev.map((item) =>
+        item.uid === target.uid
+          ? {
+              ...item,
+              suspensionLevel: suspendLevel,
+              suspensionReason: suspendReason.trim(),
+              suspendedUntil: suspendedUntilIso,
+            }
+          : item,
+      ),
+    );
+
+    await supabase.from('admin_activity_logs').insert({
+      admin_uid: uid,
+      action: 'user_suspended',
+      target_type: 'user',
+      target_id: target.uid,
+      details: {
+        level: suspendLevel,
+        reason: suspendReason.trim(),
+        duration_minutes: durationMinutes,
+        suspended_until: suspendedUntilIso,
+      },
+    });
+
+    setSuspendingUserId('');
+    closeSuspendModal();
+    showToast(`${target.name || target.email || target.uid} has been suspended.`, { variant: 'success' });
+  };
+
+  const unsuspendUser = async (user: AdminUser) => {
+    if (!supabase) {
+      return;
+    }
+
+    const prompt = `Unsuspend ${user.name || user.email || user.uid}?`;
+
+    const runUnsuspend = async () => {
+      if (!supabase) return;
+      setSuspendingUserId(user.uid);
+
+      const { error } = await supabase
+        .from('users')
+        .update({
+          suspension_level: '',
+          suspension_reason: '',
+          suspended_until: null,
+        })
+        .eq('uid', user.uid);
+
+      if (error) {
+        Alert.alert('Unable to unsuspend user', error.message);
+        setSuspendingUserId('');
+        return;
+      }
+
+      setUsers((prev) =>
+        prev.map((item) =>
+          item.uid === user.uid
+            ? {
+                ...item,
+                suspensionLevel: '',
+                suspensionReason: '',
+                suspendedUntil: '',
+              }
+            : item,
+        ),
+      );
+
+      await supabase.from('admin_activity_logs').insert({
+        admin_uid: uid,
+        action: 'user_unsuspended',
+        target_type: 'user',
+        target_id: user.uid,
+        details: {
+          previous_level: user.suspensionLevel,
+          previous_reason: user.suspensionReason,
+          previous_until: user.suspendedUntil,
+        },
+      });
+
+      setSuspendingUserId('');
+      showToast(`${user.name || user.email || user.uid} can access the app again.`, { variant: 'success' });
+    };
+
+    if (Platform.OS === 'web') {
+      const ok = typeof globalThis.confirm === 'function' ? globalThis.confirm(prompt) : true;
+      if (!ok) {
+        return;
+      }
+      await runUnsuspend();
+      return;
+    }
+
+    Alert.alert('Unsuspend user', prompt, [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Unsuspend',
+        style: 'default',
+        onPress: () => {
+          void runUnsuspend();
+        },
+      },
+    ]);
+  };
+
+  const updateReportStatus = async (report: AdminReport, nextStatus: AdminReport['status']) => {
+    if (!supabase) {
+      return;
+    }
+
+    setActingReportId(report.id);
+
+    const { error } = await supabase
+      .from('reports')
+      .update({
+        status: nextStatus,
+        resolved_by: nextStatus === 'resolved' || nextStatus === 'dismissed' ? uid : null,
+        resolved_at:
+          nextStatus === 'resolved' || nextStatus === 'dismissed'
+            ? new Date().toISOString()
+            : null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', report.id);
+
+    if (error) {
+      Alert.alert('Unable to update report', error.message);
+      setActingReportId('');
+      return;
+    }
+
+    setReports((prev) =>
+      prev.map((item) =>
+        item.id === report.id
+          ? {
+              ...item,
+              status: nextStatus,
+            }
+          : item,
+      ),
+    );
+
+    setSelectedReport((prev) =>
+      prev && prev.id === report.id
+        ? {
+            ...prev,
+            status: nextStatus,
+          }
+        : prev,
+    );
+
+    await supabase.from('admin_activity_logs').insert({
+      admin_uid: uid,
+      action: 'report_status_updated',
+      target_type: 'report',
+      target_id: report.id,
+      details: {
+        previous_status: report.status,
+        next_status: nextStatus,
+      },
+    });
+
+    setActingReportId('');
+    showToast(`Report marked as ${nextStatus}.`, { variant: 'success' });
+  };
+
+  const openReportReview = (report: AdminReport) => {
+    setSelectedReport(report);
+  };
+
+  const closeReportReview = () => {
+    if (actingReportId) {
+      return;
+    }
+    setSelectedReport(null);
   };
 
   if (!isAdmin) {
@@ -439,32 +804,113 @@ export function AdminScreen({ uid }: Props) {
           />
           <View style={styles.usersContainer}>
             <ScrollView nestedScrollEnabled showsVerticalScrollIndicator>
-              <View style={styles.userHeaderRow}>
-                <Text style={[styles.userCol, styles.userColMain]}>User</Text>
-                <Text style={[styles.userCol, styles.userColMajor]}>Major/Year</Text>
-                <Text style={[styles.userCol, styles.userColRole]}>Role</Text>
-                <Text style={[styles.userCol, styles.userColCourses]}>Courses</Text>
-              </View>
+              <View style={styles.userList}>
+                {filteredUsers.map((user) => (
+                  <View key={user.uid} style={styles.userCard}>
+                    <View style={styles.userTopRow}>
+                      <View style={styles.userAvatar}>
+                        <Text style={styles.userAvatarText}>
+                          {(user.name || user.email || 'U').trim().charAt(0).toUpperCase()}
+                        </Text>
+                      </View>
+                      <View style={styles.userIdentity}>
+                        <Text style={styles.userName}>{user.name || 'Unnamed User'}</Text>
+                        <Text style={styles.userEmail}>{user.email || user.uid}</Text>
+                      </View>
+                      <View style={styles.userColAction}>
+                        <View style={styles.userActionWrap}>
+                          <AppButton
+                            text={actingUserId === user.uid ? 'Saving...' : user.isAdmin ? 'Demote' : 'Promote'}
+                            variant={user.isAdmin ? 'outline' : 'blue'}
+                            disabled={user.uid === uid || actingUserId === user.uid || suspendingUserId === user.uid}
+                            onPress={() => void toggleUserAdmin(user)}
+                          />
+                          <AppButton
+                            text={
+                              suspendingUserId === user.uid
+                                ? 'Saving...'
+                                : isSuspended(user)
+                                  ? 'Unsuspend'
+                                  : 'Suspend'
+                            }
+                            variant={isSuspended(user) ? 'outline' : 'danger'}
+                            disabled={user.uid === uid || actingUserId === user.uid || suspendingUserId === user.uid}
+                            onPress={() =>
+                              isSuspended(user)
+                                ? void unsuspendUser(user)
+                                : openSuspendModal(user)
+                            }
+                          />
+                        </View>
+                      </View>
+                    </View>
 
-              {filteredUsers.map((user) => (
-                <View key={user.uid} style={styles.userRow}>
-                  <View style={styles.userColMain}>
-                    <Text style={styles.userName}>{user.name || 'Unnamed User'}</Text>
-                    <Text style={styles.userEmail}>{user.email || user.uid}</Text>
+                    <View style={styles.userMetaRow}>
+                      <View style={[styles.userPill, user.isAdmin ? styles.userPillAdmin : styles.userPillUser]}>
+                        <Text style={[styles.userPillText, user.isAdmin ? styles.userPillTextAdmin : styles.userPillTextUser]}>
+                          {user.isAdmin ? 'Admin' : 'User'}
+                        </Text>
+                      </View>
+                      <View style={styles.userPill}>
+                        <Text style={styles.userPillText}>Major: {user.major || 'N/A'}</Text>
+                      </View>
+                      <View style={styles.userPill}>
+                        <Text style={styles.userPillText}>Year: {user.yearLevel || 'N/A'}</Text>
+                      </View>
+                      <View style={styles.userPill}>
+                        <Text style={styles.userPillText}>Courses: {user.selectedCoursesCount}</Text>
+                      </View>
+                      {isSuspended(user) ? (
+                        <View style={[styles.userPill, styles.userPillSuspended]}>
+                          <Text style={[styles.userPillText, styles.userPillTextSuspended]}>
+                            Suspended {formatSuspensionLevel(user.suspensionLevel)} until {new Date(user.suspendedUntil).toLocaleString()}
+                          </Text>
+                        </View>
+                      ) : null}
+                      {isSuspended(user) && user.suspensionReason ? (
+                        <View style={[styles.userPill, styles.userPillSuspended]}> 
+                          <Text style={[styles.userPillText, styles.userPillTextSuspended]}>
+                            Reason: {user.suspensionReason}
+                          </Text>
+                        </View>
+                      ) : null}
+                    </View>
                   </View>
-                  <Text style={[styles.userCol, styles.userColMajor]}>
-                    {(user.major || 'N/A') + ' • Y' + (user.yearLevel || 'N/A')}
-                  </Text>
-                  <Text style={[styles.userCol, styles.userColRole]}>{user.isAdmin ? 'Admin' : 'User'}</Text>
-                  <Text style={[styles.userCol, styles.userColCourses]}>{user.selectedCoursesCount}</Text>
-                </View>
-              ))}
+                ))}
+              </View>
 
               {filteredUsers.length === 0 ? (
                 <Text style={styles.logMeta}>No users match your search.</Text>
               ) : null}
             </ScrollView>
           </View>
+        </Card>
+
+        <Card>
+          <Text style={styles.section}>Reports</Text>
+          {openReports.map((report) => (
+            <Pressable key={report.id} style={styles.reportRow} onPress={() => openReportReview(report)}>
+              <Text style={styles.reportTitle}>
+                {report.targetType.toUpperCase()} report • {report.reason}
+              </Text>
+              <Text style={styles.logMeta}>Target: {report.targetId}</Text>
+              <Text style={styles.logMeta}>Reporter: {report.reporterUid}</Text>
+              {report.details ? <Text style={styles.logMeta}>Details: {report.details}</Text> : null}
+              <Text style={styles.logMeta}>Status: {report.status}</Text>
+              <Text style={styles.logMeta}>{new Date(report.createdAt).toLocaleString()}</Text>
+
+              <View style={styles.reportActionsRow}>
+                <View style={styles.reportActionBtn}>
+                  <AppButton
+                    text="Review"
+                    variant="outline"
+                    onPress={() => openReportReview(report)}
+                  />
+                </View>
+              </View>
+            </Pressable>
+          ))}
+          {openReports.length === 0 ? <Text style={styles.logMeta}>No open reports.</Text> : null}
         </Card>
 
         <Card>
@@ -521,6 +967,119 @@ export function AdminScreen({ uid }: Props) {
                 <AppButton text="Save" variant="blue" onPress={() => void saveEditedCourse()} />
               </View>
             </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={Boolean(suspendTargetUser)}
+        transparent
+        animationType="fade"
+        onRequestClose={closeSuspendModal}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <Text style={styles.section}>Suspend User</Text>
+            <Text style={styles.logMeta}>
+              {suspendTargetUser?.name || suspendTargetUser?.email || suspendTargetUser?.uid}
+            </Text>
+
+            <View style={styles.inlineRow}>
+              {(['light', 'moderate', 'severe'] as SuspensionLevel[]).map((level) => (
+                <Pressable key={`suspend-${level}`} onPress={() => setSuspendLevel(level)}>
+                  <Badge
+                    text={`${formatSuspensionLevel(level)} (${Math.round(SUSPENSION_DURATIONS_MINUTES[level] / (24 * 60))}d)`}
+                    active={suspendLevel === level}
+                  />
+                </Pressable>
+              ))}
+            </View>
+
+            <AppInput
+              value={suspendReason}
+              onChangeText={setSuspendReason}
+              placeholder="Suspension reason"
+            />
+
+            <View style={styles.modalActionsRow}>
+              <View style={styles.modalActionItem}>
+                <AppButton text="Cancel" variant="outline" onPress={closeSuspendModal} />
+              </View>
+              <View style={styles.modalActionItem}>
+                <AppButton
+                  text={suspendingUserId ? 'Saving...' : 'Confirm'}
+                  variant="danger"
+                  disabled={!suspendReason.trim() || Boolean(suspendingUserId)}
+                  onPress={() => void applySuspension()}
+                />
+              </View>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={Boolean(selectedReport)}
+        transparent
+        animationType="fade"
+        onRequestClose={closeReportReview}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <Text style={styles.section}>Report Review</Text>
+            {selectedReport ? (
+              <>
+                <Text style={styles.logMeta}>Type: {selectedReport.targetType}</Text>
+                <Text style={styles.logMeta}>Target ID: {selectedReport.targetId}</Text>
+                <Text style={styles.logMeta}>Reporter: {selectedReport.reporterUid}</Text>
+                <Text style={styles.logMeta}>Created: {new Date(selectedReport.createdAt).toLocaleString()}</Text>
+                <Text style={styles.logMeta}>Status: {selectedReport.status}</Text>
+
+                <Text style={styles.reportModalLabel}>Reason</Text>
+                <Text style={styles.reportModalBody}>{selectedReport.reason}</Text>
+
+                <Text style={styles.reportModalLabel}>Details</Text>
+                <Text style={styles.reportModalBody}>{selectedReport.details || 'No additional details.'}</Text>
+
+                <View style={styles.reportModalActionsRow}>
+                  <View style={styles.reportActionBtn}>
+                    <AppButton
+                      text={actingReportId === selectedReport.id ? 'Saving...' : 'Mark Reviewed'}
+                      variant="outline"
+                      disabled={actingReportId === selectedReport.id || selectedReport.status === 'reviewed'}
+                      onPress={() => void updateReportStatus(selectedReport, 'reviewed')}
+                    />
+                  </View>
+                  <View style={styles.reportActionBtn}>
+                    <AppButton
+                      text={actingReportId === selectedReport.id ? 'Saving...' : 'Resolve'}
+                      variant="blue"
+                      disabled={actingReportId === selectedReport.id || selectedReport.status === 'resolved'}
+                      onPress={() => void updateReportStatus(selectedReport, 'resolved')}
+                    />
+                  </View>
+                </View>
+
+                <View style={styles.reportModalActionsRow}>
+                  <View style={styles.reportActionBtn}>
+                    <AppButton
+                      text={actingReportId === selectedReport.id ? 'Saving...' : 'Dismiss'}
+                      variant="reject"
+                      disabled={actingReportId === selectedReport.id || selectedReport.status === 'dismissed'}
+                      onPress={() => void updateReportStatus(selectedReport, 'dismissed')}
+                    />
+                  </View>
+                  <View style={styles.reportActionBtn}>
+                    <AppButton
+                      text="Close"
+                      variant="gold"
+                      disabled={Boolean(actingReportId)}
+                      onPress={closeReportReview}
+                    />
+                  </View>
+                </View>
+              </>
+            ) : null}
           </View>
         </View>
       </Modal>
@@ -587,38 +1146,86 @@ const styles = StyleSheet.create({
     padding: 8,
     backgroundColor: '#f9fafb',
   },
-  userHeaderRow: {
-    flexDirection: 'row',
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
-    paddingBottom: 6,
-    marginBottom: 4,
+  userList: {
+    gap: 10,
   },
-  userRow: {
+  userCard: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 12,
+    padding: 10,
+    backgroundColor: colors.white,
+  },
+  userTopRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
-    paddingVertical: 8,
+    gap: 10,
   },
-  userCol: {
-    color: colors.textBody,
-    fontSize: 12,
+  userAvatar: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: colors.greenSoft,
+    borderWidth: 1,
+    borderColor: colors.green,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  userColMain: {
-    flex: 2,
+  userAvatarText: {
+    color: colors.green,
+    fontWeight: '800',
+    fontSize: 16,
   },
-  userColMajor: {
-    flex: 1.3,
-  },
-  userColRole: {
+  userIdentity: {
     flex: 1,
-    fontWeight: '700',
+    minWidth: 0,
   },
-  userColCourses: {
-    flex: 0.7,
-    textAlign: 'right',
-    fontWeight: '700',
+  userMetaRow: {
+    marginTop: 10,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  userPill: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    backgroundColor: '#f8fafc',
+  },
+  userPillAdmin: {
+    borderColor: '#93c5fd',
+    backgroundColor: '#dbeafe',
+  },
+  userPillUser: {
+    borderColor: '#bbf7d0',
+    backgroundColor: '#dcfce7',
+  },
+  userPillText: {
+    color: colors.textBody,
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  userPillTextAdmin: {
+    color: '#1d4ed8',
+  },
+  userPillTextUser: {
+    color: '#166534',
+  },
+  userPillSuspended: {
+    borderColor: '#fecaca',
+    backgroundColor: '#fef2f2',
+  },
+  userPillTextSuspended: {
+    color: '#b91c1c',
+  },
+  userColAction: {
+    width: 128,
+  },
+  userActionWrap: {
+    minWidth: 120,
+    alignSelf: 'center',
   },
   userName: {
     color: colors.textStrong,
@@ -689,6 +1296,45 @@ const styles = StyleSheet.create({
     padding: 10,
     marginBottom: 8,
     backgroundColor: colors.white,
+  },
+  reportRow: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 12,
+    padding: 10,
+    marginBottom: 8,
+    backgroundColor: colors.white,
+  },
+  reportTitle: {
+    fontWeight: '700',
+    color: colors.textStrong,
+  },
+  reportActionsRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 6,
+  },
+  reportModalLabel: {
+    marginTop: 8,
+    marginBottom: 4,
+    color: colors.textStrong,
+    fontWeight: '700',
+  },
+  reportModalBody: {
+    color: colors.textBody,
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 10,
+    padding: 8,
+  },
+  reportModalActionsRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 8,
+  },
+  reportActionBtn: {
+    flex: 1,
   },
   logAction: {
     fontWeight: '700',

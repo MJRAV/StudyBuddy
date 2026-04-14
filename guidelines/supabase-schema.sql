@@ -30,6 +30,15 @@ alter table public.users
 alter table public.users
   add column if not exists notifications_last_seen_at timestamptz;
 
+alter table public.users
+  add column if not exists suspension_level text not null default '';
+
+alter table public.users
+  add column if not exists suspension_reason text not null default '';
+
+alter table public.users
+  add column if not exists suspended_until timestamptz;
+
 create table if not exists public.conversations (
   id uuid primary key default gen_random_uuid(),
   owner_id text not null,
@@ -104,6 +113,21 @@ create table if not exists public.admin_activity_logs (
   target_id text,
   details jsonb not null default '{}'::jsonb,
   created_at timestamptz not null default now()
+);
+
+create table if not exists public.reports (
+  id uuid primary key default gen_random_uuid(),
+  reporter_uid text not null references public.users(uid) on delete cascade,
+  target_type text not null check (target_type in ('post', 'comment', 'user')),
+  target_id text not null,
+  target_owner_uid text not null default '',
+  reason text not null,
+  details text not null default '',
+  status text not null default 'open' check (status in ('open', 'reviewed', 'resolved', 'dismissed')),
+  resolved_by text references public.users(uid) on delete set null,
+  resolved_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
 );
 
 insert into public.courses (name, major, year_level, semester)
@@ -305,6 +329,9 @@ create index if not exists idx_user_courses_user on public.user_courses(user_uid
 create index if not exists idx_user_courses_course on public.user_courses(course_id);
 create index if not exists idx_admin_logs_created on public.admin_activity_logs(created_at desc);
 create index if not exists idx_admin_logs_admin on public.admin_activity_logs(admin_uid, created_at desc);
+create index if not exists idx_reports_status_created on public.reports(status, created_at desc);
+create index if not exists idx_reports_target on public.reports(target_type, target_id);
+create index if not exists idx_reports_reporter on public.reports(reporter_uid, created_at desc);
 create index if not exists idx_buddies_owner on public.buddies(owner_id, added_at desc);
 create index if not exists idx_groups_members on public.study_groups using gin(member_ids);
 create index if not exists idx_group_requests_group on public.study_group_requests(group_id, status, created_at desc);
@@ -316,6 +343,7 @@ create index if not exists idx_friend_requests_target on public.friend_requests(
 create index if not exists idx_friend_requests_requester on public.friend_requests(requester_id, created_at desc);
 create index if not exists idx_direct_messages_pair on public.direct_messages(sender_id, recipient_id, created_at desc);
 create index if not exists idx_direct_messages_recipient_read on public.direct_messages(recipient_id, is_read, created_at desc);
+create index if not exists idx_users_suspended_until on public.users(suspended_until);
 
 alter table public.users enable row level security;
 alter table public.conversations enable row level security;
@@ -326,6 +354,7 @@ alter table public.community_post_comments enable row level security;
 alter table public.courses enable row level security;
 alter table public.user_courses enable row level security;
 alter table public.admin_activity_logs enable row level security;
+alter table public.reports enable row level security;
 alter table public.buddies enable row level security;
 alter table public.study_groups enable row level security;
 alter table public.study_group_requests enable row level security;
@@ -341,6 +370,25 @@ drop policy if exists users_write on public.users;
 create policy users_write on public.users for all to authenticated
   using (uid = auth.uid()::text)
   with check (uid = auth.uid()::text);
+
+drop policy if exists users_admin_update on public.users;
+create policy users_admin_update on public.users for update to authenticated
+  using (
+    exists (
+      select 1
+      from public.users u
+      where u.uid = auth.uid()::text
+        and u.is_admin = true
+    )
+  )
+  with check (
+    exists (
+      select 1
+      from public.users u
+      where u.uid = auth.uid()::text
+        and u.is_admin = true
+    )
+  );
 
 drop policy if exists conversations_owner_all on public.conversations;
 create policy conversations_owner_all on public.conversations for all to authenticated
@@ -478,6 +526,41 @@ create policy admin_logs_insert on public.admin_activity_logs for insert to auth
   with check (
     admin_uid = auth.uid()::text
     and exists (
+      select 1
+      from public.users u
+      where u.uid = auth.uid()::text
+        and u.is_admin = true
+    )
+  );
+
+drop policy if exists reports_insert_own on public.reports;
+create policy reports_insert_own on public.reports for insert to authenticated
+  with check (reporter_uid = auth.uid()::text);
+
+drop policy if exists reports_select_own_or_admin on public.reports;
+create policy reports_select_own_or_admin on public.reports for select to authenticated
+  using (
+    reporter_uid = auth.uid()::text
+    or exists (
+      select 1
+      from public.users u
+      where u.uid = auth.uid()::text
+        and u.is_admin = true
+    )
+  );
+
+drop policy if exists reports_update_admin on public.reports;
+create policy reports_update_admin on public.reports for update to authenticated
+  using (
+    exists (
+      select 1
+      from public.users u
+      where u.uid = auth.uid()::text
+        and u.is_admin = true
+    )
+  )
+  with check (
+    exists (
       select 1
       from public.users u
       where u.uid = auth.uid()::text

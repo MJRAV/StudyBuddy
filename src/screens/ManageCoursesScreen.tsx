@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { Major, Semester, Year } from '../lib/courseCatalog';
 import { getCoursesForTerm } from '../lib/coursesService';
@@ -21,6 +21,7 @@ export function ManageCoursesScreen({ uid, onComplete }: Props) {
   const [availableCourses, setAvailableCourses] = useState<string[]>([]);
   const [search, setSearch] = useState('');
   const [saving, setSaving] = useState(false);
+  const saveInFlightRef = useRef(false);
 
   // Load current profile settings and course roles
   useEffect(() => {
@@ -102,7 +103,12 @@ export function ManageCoursesScreen({ uid, onComplete }: Props) {
       return;
     }
 
+    if (saveInFlightRef.current) {
+      return;
+    }
+
     try {
+      saveInFlightRef.current = true;
       setSaving(true);
       const selectedCourses = Object.keys(courseRoles);
 
@@ -143,13 +149,30 @@ export function ManageCoursesScreen({ uid, onComplete }: Props) {
         }))
         .filter((row) => row.course_id && row.role);
 
-      if (rowsToUpsert.length) {
-        const { error: upsertError } = await supabase
-          .from('user_courses')
-          .upsert(rowsToUpsert, { onConflict: 'user_uid,course_id' });
+      const dedupedRows = Array.from(
+        rowsToUpsert.reduce((map, row) => {
+          map.set(row.course_id, row);
+          return map;
+        }, new Map<string, (typeof rowsToUpsert)[number]>()),
+      ).map((entry) => entry[1]);
 
-        if (upsertError) {
-          throw upsertError;
+      // Sync strategy is more resilient than upsert for projects with legacy schema drift.
+      const { error: deleteError } = await supabase
+        .from('user_courses')
+        .delete()
+        .eq('user_uid', uid);
+
+      if (deleteError) {
+        throw deleteError;
+      }
+
+      if (dedupedRows.length) {
+        const { error: insertError } = await supabase
+          .from('user_courses')
+          .insert(dedupedRows);
+
+        if (insertError) {
+          throw insertError;
         }
       }
 
@@ -158,6 +181,7 @@ export function ManageCoursesScreen({ uid, onComplete }: Props) {
       const message = err instanceof Error ? err.message : 'Unable to save selected courses.';
       Alert.alert('Save failed', message);
     } finally {
+      saveInFlightRef.current = false;
       setSaving(false);
     }
   };

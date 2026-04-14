@@ -16,7 +16,7 @@ export async function getUserProfile(uid: string): Promise<UserProfileRecord | n
 
   const { data, error } = await supabase
     .from('users')
-    .select('uid,email,name,avatar_url,user_role,selected_courses,bio,major,year_level,semester,has_seen_onboarding,course_roles')
+    .select('uid,email,name,avatar_url,user_role,selected_courses,bio,major,year_level,semester,has_seen_onboarding,course_roles,suspension_level,suspension_reason,suspended_until')
     .eq('uid', uid)
     .maybeSingle();
 
@@ -55,6 +55,9 @@ export async function getUserProfile(uid: string): Promise<UserProfileRecord | n
     semester: String(data.semester ?? ''),
     hasSeenOnboarding: Boolean(data.has_seen_onboarding),
     courseRoles,
+    suspensionLevel: String(data.suspension_level ?? ''),
+    suspensionReason: String(data.suspension_reason ?? ''),
+    suspendedUntil: String(data.suspended_until ?? ''),
   };
 }
 

@@ -3,6 +3,7 @@ import { Alert, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'rea
 import { getUserProfile, supabase } from '../lib/supabase';
 import { AppButton, AppInput, Card, Heading, Screen, Subheading } from '../ui/components';
 import { colors } from '../ui/theme';
+import { useToast } from '../ui/toast';
 
 type Mentor = {
   uid: string;
@@ -16,6 +17,7 @@ type Mentor = {
 type Props = { uid: string };
 
 export function FindMentorScreen({ uid }: Props) {
+  const { showToast } = useToast();
   const [myCourses, setMyCourses] = useState<string[]>([]);
   const [search, setSearch] = useState('');
   const [mentors, setMentors] = useState<Mentor[]>([]);
@@ -171,7 +173,7 @@ export function FindMentorScreen({ uid }: Props) {
       return;
     }
 
-    Alert.alert('Request sent', `Follow request sent to ${mentor.name}`);
+    showToast(`Follow request sent to ${mentor.name}.`, { variant: 'success' });
   };
 
   return (

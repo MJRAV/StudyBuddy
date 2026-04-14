@@ -13,7 +13,7 @@ export const supabase = isSupabaseConfigured
         storage: AsyncStorage,
         autoRefreshToken: true,
         persistSession: true,
-        detectSessionInUrl: false,
+        detectSessionInUrl: typeof window !== 'undefined',
       },
     })
   : null;
@@ -25,6 +25,9 @@ export type UserProfile = {
   avatarUrl: string;
   userRole: string;
   selectedCourses: string[];
+  suspensionLevel: string;
+  suspensionReason: string;
+  suspendedUntil: string;
 };
 
 export async function ensureUserProfile(uid: string, email: string, name = ''): Promise<void> {
@@ -34,7 +37,7 @@ export async function ensureUserProfile(uid: string, email: string, name = ''): 
 
   const { data: existing, error: readError } = await supabase
     .from('users')
-    .select('uid')
+    .select('uid,name')
     .eq('uid', uid)
     .maybeSingle();
 
@@ -70,7 +73,6 @@ export async function ensureUserProfile(uid: string, email: string, name = ''): 
     .from('users')
     .update({
       email,
-      ...(name ? { name } : {}),
       updated_at: new Date().toISOString(),
     })
     .eq('uid', uid);
@@ -87,7 +89,7 @@ export async function getUserProfile(uid: string): Promise<UserProfile | null> {
 
   const { data, error } = await supabase
     .from('users')
-    .select('uid,email,name,avatar_url,user_role,selected_courses')
+    .select('uid,email,name,avatar_url,user_role,selected_courses,suspension_level,suspension_reason,suspended_until')
     .eq('uid', uid)
     .maybeSingle();
 
@@ -108,5 +110,8 @@ export async function getUserProfile(uid: string): Promise<UserProfile | null> {
     selectedCourses: Array.isArray(data.selected_courses)
       ? data.selected_courses.map((item: unknown) => String(item))
       : [],
+    suspensionLevel: String(data.suspension_level ?? ''),
+    suspensionReason: String(data.suspension_reason ?? ''),
+    suspendedUntil: String(data.suspended_until ?? ''),
   };
 }

@@ -1,13 +1,22 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, Image, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { getUserProfile, supabase, type UserProfile } from '../lib/supabase';
 import { AppButton, AppInput, Badge, Card, Heading, Screen, Subheading } from '../ui/components';
 import { colors } from '../ui/theme';
+import { useToast } from '../ui/toast';
 
 type CommunityComment = {
   id: string;
+  authorId: string;
   author: string;
   content: string;
+};
+
+type ReportTarget = {
+  type: 'post' | 'comment' | 'user';
+  id: string;
+  ownerId: string;
+  preview: string;
 };
 
 type CommunityPost = {
@@ -26,6 +35,7 @@ type CommunityPost = {
 type Props = { uid: string };
 
 export function CommunityScreen({ uid }: Props) {
+  const { showToast } = useToast();
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [posts, setPosts] = useState<CommunityPost[]>([]);
   const [courseFilter, setCourseFilter] = useState('all');
@@ -33,6 +43,10 @@ export function CommunityScreen({ uid }: Props) {
   const [newPost, setNewPost] = useState('');
   const [commentDrafts, setCommentDrafts] = useState<Record<string, string>>({});
   const [openComments, setOpenComments] = useState<Record<string, boolean>>({});
+  const [reportTarget, setReportTarget] = useState<ReportTarget | null>(null);
+  const [reportReason, setReportReason] = useState('');
+  const [reportDetails, setReportDetails] = useState('');
+  const [submittingReport, setSubmittingReport] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -53,7 +67,7 @@ export function CommunityScreen({ uid }: Props) {
           .select('id,author_id,author_name,author_role,course,content')
           .order('created_at', { ascending: false }),
         supabase.from('community_post_likes').select('post_id,user_id'),
-        supabase.from('community_post_comments').select('id,post_id,author_name,content').order('created_at', { ascending: true }),
+        supabase.from('community_post_comments').select('id,post_id,author_id,author_name,content').order('created_at', { ascending: true }),
       ]);
 
       if (!active || postsResp.error || likesResp.error || commentsResp.error) {
@@ -82,6 +96,7 @@ export function CommunityScreen({ uid }: Props) {
         const list = commentsByPost.get(postId) ?? [];
         list.push({
           id: String(row.id ?? ''),
+          authorId: String(row.author_id ?? ''),
           author: String(row.author_name ?? 'User'),
           content: String(row.content ?? ''),
         });
@@ -208,6 +223,53 @@ export function CommunityScreen({ uid }: Props) {
     setOpenComments((prev) => ({ ...prev, [post.id]: true }));
   };
 
+  const openReportModal = (target: ReportTarget) => {
+    setReportTarget(target);
+    setReportReason('');
+    setReportDetails('');
+  };
+
+  const closeReportModal = () => {
+    if (submittingReport) {
+      return;
+    }
+    setReportTarget(null);
+    setReportReason('');
+    setReportDetails('');
+  };
+
+  const submitReport = async () => {
+    if (!supabase || !reportTarget || !reportReason.trim()) {
+      return;
+    }
+
+    setSubmittingReport(true);
+
+    const { error } = await supabase.from('reports').insert({
+      reporter_uid: uid,
+      target_type: reportTarget.type,
+      target_id: reportTarget.id,
+      target_owner_uid: reportTarget.ownerId,
+      reason: reportReason.trim(),
+      details: reportDetails.trim(),
+      status: 'open',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+
+    setSubmittingReport(false);
+
+    if (error) {
+      Alert.alert('Unable to submit report', error.message);
+      return;
+    }
+
+    showToast('Report submitted. Admins will review it.', { variant: 'success' });
+    setReportTarget(null);
+    setReportReason('');
+    setReportDetails('');
+  };
+
   const courseOptions = profile?.selectedCourses ?? [];
 
   return (
@@ -304,6 +366,18 @@ export function CommunityScreen({ uid }: Props) {
               <Pressable onPress={() => setOpenComments((prev) => ({ ...prev, [post.id]: !prev[post.id] }))}>
                 <Text style={styles.actionText}>Comments ({post.comments.length})</Text>
               </Pressable>
+              <Pressable
+                onPress={() =>
+                  openReportModal({
+                    type: 'post',
+                    id: post.id,
+                    ownerId: post.authorId,
+                    preview: post.content,
+                  })
+                }
+              >
+                <Text style={styles.reportActionText}>Report</Text>
+              </Pressable>
             </View>
 
             {openComments[post.id] ? (
@@ -312,6 +386,19 @@ export function CommunityScreen({ uid }: Props) {
                   <View key={c.id} style={styles.commentBox}>
                     <Text style={styles.commentAuthor}>{c.author}</Text>
                     <Text style={styles.commentBody}>{c.content}</Text>
+                    <Pressable
+                      style={styles.commentReportWrap}
+                      onPress={() =>
+                        openReportModal({
+                          type: 'comment',
+                          id: c.id,
+                          ownerId: c.authorId,
+                          preview: c.content,
+                        })
+                      }
+                    >
+                      <Text style={styles.reportActionText}>Report Comment</Text>
+                    </Pressable>
                   </View>
                 ))}
                 <View style={styles.commentComposer}>
@@ -329,6 +416,55 @@ export function CommunityScreen({ uid }: Props) {
             ) : null}
           </Card>
         ))}
+
+        <Modal
+          visible={Boolean(reportTarget)}
+          transparent
+          animationType="fade"
+          onRequestClose={closeReportModal}
+        >
+          <View style={styles.modalBackdrop}>
+            <View style={styles.modalCard}>
+              <Text style={styles.modalTitle}>Report Content</Text>
+              <Text style={styles.modalMeta}>
+                Target: {reportTarget?.type}
+              </Text>
+              <Text style={styles.modalPreview} numberOfLines={3}>
+                {reportTarget?.preview || ''}
+              </Text>
+
+              <View style={styles.reportReasonRow}>
+                {['Spam', 'Harassment', 'Cheating', 'Other'].map((option) => (
+                  <Pressable key={option} onPress={() => setReportReason(option)}>
+                    <Badge text={option} active={reportReason === option} />
+                  </Pressable>
+                ))}
+              </View>
+
+              <AppInput
+                placeholder="Additional details (optional)"
+                value={reportDetails}
+                onChangeText={setReportDetails}
+                multiline
+                style={styles.reportDetailsInput}
+              />
+
+              <View style={styles.reportActionsRow}>
+                <View style={styles.reportActionBtn}>
+                  <AppButton text="Cancel" variant="outline" onPress={closeReportModal} disabled={submittingReport} />
+                </View>
+                <View style={styles.reportActionBtn}>
+                  <AppButton
+                    text={submittingReport ? 'Submitting...' : 'Submit'}
+                    variant="danger"
+                    onPress={() => void submitReport()}
+                    disabled={submittingReport || !reportReason.trim()}
+                  />
+                </View>
+              </View>
+            </View>
+          </View>
+        </Modal>
       </ScrollView>
     </Screen>
   );
@@ -438,6 +574,10 @@ const styles = StyleSheet.create({
     color: colors.green,
     fontWeight: '700',
   },
+  reportActionText: {
+    color: '#b91c1c',
+    fontWeight: '700',
+  },
   commentsWrap: {
     marginTop: 10,
     gap: 8,
@@ -457,6 +597,10 @@ const styles = StyleSheet.create({
   commentBody: {
     color: colors.textBody,
   },
+  commentReportWrap: {
+    marginTop: 6,
+    alignSelf: 'flex-end',
+  },
   commentComposer: {
     gap: 8,
   },
@@ -467,5 +611,55 @@ const styles = StyleSheet.create({
   sendWrap: {
     alignSelf: 'flex-end',
     minWidth: 96,
+  },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    justifyContent: 'center',
+    padding: 18,
+  },
+  modalCard: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 14,
+    backgroundColor: colors.white,
+    padding: 14,
+  },
+  modalTitle: {
+    fontWeight: '800',
+    fontSize: 17,
+    color: colors.textStrong,
+  },
+  modalMeta: {
+    marginTop: 4,
+    color: colors.textMuted,
+  },
+  modalPreview: {
+    marginTop: 8,
+    color: colors.textBody,
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 10,
+    padding: 8,
+  },
+  reportReasonRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginTop: 10,
+    marginBottom: 8,
+  },
+  reportDetailsInput: {
+    minHeight: 76,
+    textAlignVertical: 'top',
+  },
+  reportActionsRow: {
+    marginTop: 8,
+    flexDirection: 'row',
+    gap: 8,
+  },
+  reportActionBtn: {
+    flex: 1,
   },
 });

@@ -5,6 +5,7 @@ import { getUserProfile, supabase } from '../lib/supabase';
 import { uploadProfilePicture } from '../lib/userService';
 import { AppButton, AppInput, Card, Heading, Label, Screen, Subheading } from '../ui/components';
 import { colors } from '../ui/theme';
+import { useToast } from '../ui/toast';
 
 type Props = {
   uid: string;
@@ -14,6 +15,7 @@ type Props = {
 };
 
 export function ProfileScreen({ uid, onLogout, onOpenAdmin, onManageCourses }: Props) {
+  const { showToast } = useToast();
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [bio, setBio] = useState('');
@@ -95,7 +97,7 @@ export function ProfileScreen({ uid, onLogout, onOpenAdmin, onManageCourses }: P
     }
 
     setIsEditing(false);
-    Alert.alert('Saved', 'Profile updated.');
+    showToast('Successfully changed profile.', { variant: 'success' });
   };
 
   const handleChangePhoto = async () => {
@@ -123,6 +125,7 @@ export function ProfileScreen({ uid, onLogout, onOpenAdmin, onManageCourses }: P
 
       const url = await uploadProfilePicture(uid, uri);
       setAvatarUrl(url);
+      showToast('Profile picture updated.', { variant: 'success' });
     } catch (err: any) {
       Alert.alert('Upload failed', err?.message ?? 'Could not upload profile picture.');
     }

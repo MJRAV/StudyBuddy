@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
@@ -18,8 +18,9 @@ import { ProfileScreen } from './src/screens/ProfileScreen';
 import { AdminScreen } from './src/screens/AdminScreen';
 import { ManageCoursesScreen } from './src/screens/ManageCoursesScreen';
 import { SplashScreen } from './src/screens/SplashScreen';
-import { getUserProfile, isSupabaseConfigured, supabase } from './src/lib/supabase';
+import { ensureUserProfile, getUserProfile, isSupabaseConfigured, supabase } from './src/lib/supabase';
 import { materializeAcceptedConnections } from './src/lib/socialService';
+import { ToastProvider } from './src/ui/toast';
 
 type AuthStackParamList = {
   Login: undefined;
@@ -39,6 +40,12 @@ type TabsParamList = {
   Mentors: undefined;
   Buddies: undefined;
   Profile: undefined;
+};
+
+type SuspensionState = {
+  level: string;
+  reason: string;
+  suspendedUntil: string;
 };
 
 const AuthStack = createNativeStackNavigator<AuthStackParamList>();
@@ -75,6 +82,34 @@ function toBadgeText(count: number): string {
     return '99+';
   }
   return String(count);
+}
+
+function formatSuspensionLevel(level: string): string {
+  if (!level) {
+    return 'Suspension';
+  }
+  return `${level.charAt(0).toUpperCase()}${level.slice(1).toLowerCase()} Suspension`;
+}
+
+function formatRemainingTime(ms: number): string {
+  if (ms <= 0) {
+    return '00:00:00';
+  }
+
+  const totalSeconds = Math.floor(ms / 1000);
+  const days = Math.floor(totalSeconds / 86400);
+  const hours = Math.floor((totalSeconds % 86400) / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  const hh = String(hours).padStart(2, '0');
+  const mm = String(minutes).padStart(2, '0');
+  const ss = String(seconds).padStart(2, '0');
+
+  if (days > 0) {
+    return `${days}d ${hh}:${mm}:${ss}`;
+  }
+  return `${hh}:${mm}:${ss}`;
 }
 
 function HomeTabs({ uid, onLogout, onOpenAdmin, onManageCourses }: HomeTabsProps) {
@@ -384,6 +419,8 @@ export default function App() {
   const [needsCourseSelection, setNeedsCourseSelection] = useState(false);
   const [needsOnboarding, setNeedsOnboarding] = useState(false);
   const [openAdminFlag, setOpenAdminFlag] = useState(false);
+  const [suspensionState, setSuspensionState] = useState<SuspensionState | null>(null);
+  const [countdownNowMs, setCountdownNowMs] = useState(Date.now());
 
   useEffect(() => {
     const id = setTimeout(() => {
@@ -413,7 +450,7 @@ export default function App() {
 
       const { data, error } = await supabase
         .from('users')
-        .select('has_seen_onboarding,selected_courses')
+        .select('has_seen_onboarding,selected_courses,suspension_level,suspension_reason,suspended_until')
         .eq('uid', currentUid)
         .maybeSingle();
 
@@ -428,6 +465,19 @@ export default function App() {
         ? data.selected_courses
         : profile.selectedCourses;
       const hasSeenOnboarding = Boolean(data?.has_seen_onboarding);
+      const suspendedUntil = String(data?.suspended_until ?? '');
+      const suspendedUntilTs = Date.parse(suspendedUntil);
+      const isSuspended = Number.isFinite(suspendedUntilTs) && suspendedUntilTs > Date.now();
+
+      if (isSuspended) {
+        setSuspensionState({
+          level: String(data?.suspension_level ?? ''),
+          reason: String(data?.suspension_reason ?? ''),
+          suspendedUntil,
+        });
+      } else {
+        setSuspensionState(null);
+      }
 
       setNeedsCourseSelection(selectedCourses.length === 0);
       setNeedsOnboarding(!hasSeenOnboarding);
@@ -435,6 +485,7 @@ export default function App() {
       console.warn('refreshFlowState failed', error);
       setNeedsCourseSelection(false);
       setNeedsOnboarding(false);
+      setSuspensionState(null);
     }
   };
 
@@ -448,35 +499,67 @@ export default function App() {
 
     let active = true;
 
+    // Do not block app startup on auth/session hydration.
+    setReady(true);
+
     const boot = async () => {
       try {
         const { data } = await client.auth.getSession();
-        const currentUid = data.session?.user?.id ?? '';
+        const sessionUser = data.session?.user;
+        const currentUid = sessionUser?.id ?? '';
+
+        if (currentUid) {
+          const email = String(sessionUser?.email ?? '');
+          const fullName = String(sessionUser?.user_metadata?.full_name ?? sessionUser?.user_metadata?.name ?? '');
+          void ensureUserProfile(currentUid, email, fullName).catch((error) => {
+            console.warn('Failed to ensure user profile during boot', error);
+          });
+        }
 
         if (!active) {
           return;
         }
 
         setUid(currentUid);
-        setReady(true);
 
         if (currentUid) {
           void refreshFlowState(currentUid);
         } else {
           setNeedsCourseSelection(false);
           setNeedsOnboarding(false);
+          setSuspensionState(null);
         }
       } catch (error) {
         console.warn('Initial auth boot failed', error);
+        if (!active) {
+          return;
+        }
+        setUid('');
+        setNeedsCourseSelection(false);
+        setNeedsOnboarding(false);
+        setSuspensionState(null);
+        setReady(true);
       } finally {
-        if (!active) return;
+        if (!active) {
+          return;
+        }
       }
     };
 
     void boot();
 
     const { data: listener } = client.auth.onAuthStateChange(async (_event, session) => {
-      const currentUid = session?.user?.id ?? '';
+      const sessionUser = session?.user;
+      const currentUid = sessionUser?.id ?? '';
+
+      if (currentUid) {
+        const email = String(sessionUser?.email ?? '');
+        const fullName = String(sessionUser?.user_metadata?.full_name ?? sessionUser?.user_metadata?.name ?? '');
+        void ensureUserProfile(currentUid, email, fullName).catch((error) => {
+          console.warn('Failed to ensure user profile on auth state change', error);
+        });
+      }
+
       setUid(currentUid);
 
       try {
@@ -485,6 +568,7 @@ export default function App() {
         } else {
           setNeedsCourseSelection(false);
           setNeedsOnboarding(false);
+          setSuspensionState(null);
         }
       } catch (error) {
         console.warn('Auth state change handler failed', error);
@@ -501,6 +585,62 @@ export default function App() {
 
   // Keep buddy rows in sync for users who previously sent requests that
   // have since been accepted, mirroring the legacy materializeAcceptedConnections
+  useEffect(() => {
+    const id = setInterval(() => {
+      setCountdownNowMs(Date.now());
+    }, 1000);
+
+    return () => {
+      clearInterval(id);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!uid || !supabase) {
+      return;
+    }
+
+    const client = supabase;
+
+    let active = true;
+
+    const refreshSuspensionState = async () => {
+      const { data, error } = await client
+        .from('users')
+        .select('suspension_level,suspension_reason,suspended_until')
+        .eq('uid', uid)
+        .maybeSingle();
+
+      if (!active || error) {
+        return;
+      }
+
+      const suspendedUntil = String(data?.suspended_until ?? '');
+      const suspendedUntilTs = Date.parse(suspendedUntil);
+      const isSuspended = Number.isFinite(suspendedUntilTs) && suspendedUntilTs > Date.now();
+
+      if (isSuspended) {
+        setSuspensionState({
+          level: String(data?.suspension_level ?? ''),
+          reason: String(data?.suspension_reason ?? ''),
+          suspendedUntil,
+        });
+      } else {
+        setSuspensionState(null);
+      }
+    };
+
+    void refreshSuspensionState();
+    const id = setInterval(() => {
+      void refreshSuspensionState();
+    }, 15000);
+
+    return () => {
+      active = false;
+      clearInterval(id);
+    };
+  }, [uid]);
+
   useEffect(() => {
     if (!uid || !supabase) {
       return;
@@ -537,6 +677,7 @@ export default function App() {
     setUid('');
     setNeedsCourseSelection(false);
     setNeedsOnboarding(false);
+    setSuspensionState(null);
   };
 
   const authNavigator = useMemo(
@@ -550,95 +691,150 @@ export default function App() {
   );
 
   if (!isSupabaseConfigured) {
-    return <ConfigScreen />;
+    return (
+      <ToastProvider>
+        <ConfigScreen />
+      </ToastProvider>
+    );
   }
 
   if (showSplash) {
-    return <SplashScreen />;
+    return (
+      <ToastProvider>
+        <SplashScreen />
+      </ToastProvider>
+    );
   }
 
   if (!ready) {
-    return <LoadingScreen />;
+    return (
+      <ToastProvider>
+        <LoadingScreen />
+      </ToastProvider>
+    );
   }
 
   if (!uid) {
     return (
-      <NavigationContainer>
-        {authNavigator}
-        <StatusBar style="dark" />
-      </NavigationContainer>
+      <ToastProvider>
+        <NavigationContainer>
+          {authNavigator}
+          <StatusBar style="dark" />
+        </NavigationContainer>
+      </ToastProvider>
     );
   }
 
   if (needsCourseSelection) {
     return (
-      <View style={styles.fill}>
-        <CourseSelectionScreen
-          uid={uid}
-          onComplete={async () => {
-            await refreshFlowState(uid);
-          }}
-        />
-        <StatusBar style="dark" />
-      </View>
+      <ToastProvider>
+        <View style={styles.fill}>
+          <CourseSelectionScreen
+            uid={uid}
+            onComplete={async () => {
+              await refreshFlowState(uid);
+            }}
+          />
+          <StatusBar style="dark" />
+        </View>
+      </ToastProvider>
     );
   }
 
   if (needsOnboarding) {
     return (
-      <View style={styles.fill}>
-        <OnboardingScreen
-          onComplete={async () => {
-            await supabase?.from('users').update({ has_seen_onboarding: true }).eq('uid', uid);
-            await refreshFlowState(uid);
-          }}
-        />
-        <StatusBar style="dark" />
-      </View>
+      <ToastProvider>
+        <View style={styles.fill}>
+          <OnboardingScreen
+            onComplete={async () => {
+              await supabase?.from('users').update({ has_seen_onboarding: true }).eq('uid', uid);
+              await refreshFlowState(uid);
+            }}
+          />
+          <StatusBar style="dark" />
+        </View>
+      </ToastProvider>
+    );
+  }
+
+  const suspensionUntilTs = Date.parse(String(suspensionState?.suspendedUntil ?? ''));
+  const hasActiveSuspension = Boolean(
+    suspensionState && Number.isFinite(suspensionUntilTs) && suspensionUntilTs > countdownNowMs,
+  );
+
+  if (hasActiveSuspension && suspensionState) {
+    const remainingMs = Math.max(0, suspensionUntilTs - countdownNowMs);
+    return (
+      <ToastProvider>
+        <View style={styles.suspensionScreen}>
+          <Modal visible transparent animationType="fade">
+            <View style={styles.suspensionBackdrop}>
+              <View style={styles.suspensionCard}>
+                <Text style={styles.suspensionTitle}>{formatSuspensionLevel(suspensionState.level)}</Text>
+                <Text style={styles.suspensionBody}>
+                  Your account is temporarily suspended. You cannot use features until the suspension expires.
+                </Text>
+                <Text style={styles.suspensionLabel}>Reason</Text>
+                <Text style={styles.suspensionValue}>{suspensionState.reason || 'No reason provided.'}</Text>
+                <Text style={styles.suspensionLabel}>Time Until Resume</Text>
+                <Text style={styles.suspensionCountdown}>{formatRemainingTime(remainingMs)}</Text>
+                <Text style={styles.suspensionUntil}>Resumes at {new Date(suspensionUntilTs).toLocaleString()}</Text>
+
+                <Pressable style={styles.linkButton} onPress={() => void logout()}>
+                  <Text style={styles.linkButtonText}>Log Out</Text>
+                </Pressable>
+              </View>
+            </View>
+          </Modal>
+          <StatusBar style="dark" />
+        </View>
+      </ToastProvider>
     );
   }
 
   return (
-    <NavigationContainer>
-      <AppStack.Navigator>
-        <AppStack.Screen name="HomeTabs" options={{ headerShown: false }}>
-          {({ navigation }) => (
-            <HomeTabs
-              uid={uid}
-              onLogout={logout}
-              onOpenAdmin={() => {
-                setOpenAdminFlag(true);
-                navigation.navigate('Admin');
-              }}
-              onManageCourses={() => {
-                navigation.navigate('ManageCourses');
-              }}
-            />
-          )}
-        </AppStack.Screen>
-        <AppStack.Screen name="Admin" options={{ title: 'Admin' }}>
-          {() => (
-            <View style={styles.fill}>
-              {openAdminFlag ? <AdminScreen uid={uid} /> : <Text style={styles.message}>Open Admin from Profile.</Text>}
-            </View>
-          )}
-        </AppStack.Screen>
-        <AppStack.Screen name="ManageCourses" options={{ title: 'Manage Courses' }}>
-          {({ navigation }) => (
-            <View style={styles.fill}>
-              <ManageCoursesScreen
+    <ToastProvider>
+      <NavigationContainer>
+        <AppStack.Navigator>
+          <AppStack.Screen name="HomeTabs" options={{ headerShown: false }}>
+            {({ navigation }) => (
+              <HomeTabs
                 uid={uid}
-                onComplete={async () => {
-                  await refreshFlowState(uid);
-                  navigation.goBack();
+                onLogout={logout}
+                onOpenAdmin={() => {
+                  setOpenAdminFlag(true);
+                  navigation.navigate('Admin');
+                }}
+                onManageCourses={() => {
+                  navigation.navigate('ManageCourses');
                 }}
               />
-            </View>
-          )}
-        </AppStack.Screen>
-      </AppStack.Navigator>
-      <StatusBar style="dark" />
-    </NavigationContainer>
+            )}
+          </AppStack.Screen>
+          <AppStack.Screen name="Admin" options={{ title: 'Admin' }}>
+            {() => (
+              <View style={styles.fill}>
+                {openAdminFlag ? <AdminScreen uid={uid} /> : <Text style={styles.message}>Open Admin from Profile.</Text>}
+              </View>
+            )}
+          </AppStack.Screen>
+          <AppStack.Screen name="ManageCourses" options={{ title: 'Manage Courses' }}>
+            {({ navigation }) => (
+              <View style={styles.fill}>
+                <ManageCoursesScreen
+                  uid={uid}
+                  onComplete={async () => {
+                    await refreshFlowState(uid);
+                    navigation.goBack();
+                  }}
+                />
+              </View>
+            )}
+          </AppStack.Screen>
+        </AppStack.Navigator>
+        <StatusBar style="dark" />
+      </NavigationContainer>
+    </ToastProvider>
   );
 }
 
@@ -667,6 +863,54 @@ const styles = StyleSheet.create({
     marginTop: 10,
     color: '#374151',
     fontWeight: '600',
+  },
+  suspensionScreen: {
+    flex: 1,
+    backgroundColor: '#fef3c7',
+  },
+  suspensionBackdrop: {
+    flex: 1,
+    padding: 20,
+    justifyContent: 'center',
+    backgroundColor: 'rgba(20, 83, 45, 0.2)',
+  },
+  suspensionCard: {
+    backgroundColor: '#fff7ed',
+    borderWidth: 1,
+    borderColor: '#fca5a5',
+    borderRadius: 16,
+    padding: 16,
+  },
+  suspensionTitle: {
+    fontSize: 22,
+    fontWeight: '900',
+    color: '#991b1b',
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  suspensionBody: {
+    color: '#7f1d1d',
+    textAlign: 'center',
+    marginBottom: 12,
+  },
+  suspensionLabel: {
+    color: '#7f1d1d',
+    fontWeight: '700',
+    marginTop: 8,
+  },
+  suspensionValue: {
+    color: '#450a0a',
+    marginTop: 4,
+  },
+  suspensionCountdown: {
+    color: '#991b1b',
+    fontWeight: '900',
+    fontSize: 22,
+    marginTop: 4,
+  },
+  suspensionUntil: {
+    marginTop: 6,
+    color: '#7f1d1d',
   },
   linkButton: {
     marginTop: 14,

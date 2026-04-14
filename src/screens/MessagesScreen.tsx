@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, Image, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { supabase } from '../lib/supabase';
-import { AppButton, AppInput, Card, Heading, Screen, Subheading } from '../ui/components';
+import { AppButton, AppInput, Badge, Card, Heading, Screen, Subheading } from '../ui/components';
 import { colors } from '../ui/theme';
+import { useToast } from '../ui/toast';
 
 type BuddyConversation = {
   buddyId: string;
@@ -32,9 +33,21 @@ type GroupConversation = {
   participantIds: string[];
 };
 
+type MessageUserProfile = {
+  uid: string;
+  name: string;
+  major: string;
+  yearLevel: string;
+  role: string;
+  bio: string;
+  courses: string[];
+  avatarUrl: string;
+};
+
 type Props = { uid: string };
 
 export function MessagesScreen({ uid }: Props) {
+  const { showToast } = useToast();
   const [conversations, setConversations] = useState<BuddyConversation[]>([]);
   const [activeBuddyId, setActiveBuddyId] = useState('');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -46,6 +59,12 @@ export function MessagesScreen({ uid }: Props) {
   const [groupMessages, setGroupMessages] = useState<ChatMessage[]>([]);
   const [groupDraft, setGroupDraft] = useState('');
   const [search, setSearch] = useState('');
+  const [selectedProfile, setSelectedProfile] = useState<MessageUserProfile | null>(null);
+  const [loadingProfile, setLoadingProfile] = useState(false);
+  const [reportReason, setReportReason] = useState('');
+  const [reportDetails, setReportDetails] = useState('');
+  const [submittingReport, setSubmittingReport] = useState(false);
+  const [profileCache, setProfileCache] = useState<Record<string, MessageUserProfile>>({});
 
   useEffect(() => {
     let active = true;
@@ -465,6 +484,98 @@ export function MessagesScreen({ uid }: Props) {
     );
   };
 
+  const openUserProfile = async (targetUid: string) => {
+    if (!supabase || !targetUid || targetUid === uid) {
+      return;
+    }
+
+    const cached = profileCache[targetUid];
+    if (cached) {
+      setSelectedProfile(cached);
+      setReportReason('');
+      setReportDetails('');
+      return;
+    }
+
+    setLoadingProfile(true);
+
+    const { data, error } = await supabase
+      .from('users')
+      .select('uid,name,major,year_level,user_role,bio,selected_courses,avatar_url')
+      .eq('uid', targetUid)
+      .maybeSingle();
+
+    setLoadingProfile(false);
+
+    if (error) {
+      Alert.alert('Unable to open profile', error.message);
+      return;
+    }
+
+    if (!data) {
+      Alert.alert('Profile unavailable', 'This user profile is unavailable right now.');
+      return;
+    }
+
+    const profile: MessageUserProfile = {
+      uid: String(data.uid ?? targetUid),
+      name: String(data.name ?? 'User'),
+      major: String(data.major ?? ''),
+      yearLevel: String(data.year_level ?? ''),
+      role: String(data.user_role ?? ''),
+      bio: String(data.bio ?? ''),
+      courses: Array.isArray(data.selected_courses)
+        ? data.selected_courses.map((item: unknown) => String(item))
+        : [],
+      avatarUrl: String(data.avatar_url ?? ''),
+    };
+
+    setProfileCache((prev) => ({ ...prev, [profile.uid]: profile }));
+    setSelectedProfile(profile);
+    setReportReason('');
+    setReportDetails('');
+  };
+
+  const closeProfileModal = () => {
+    if (submittingReport) {
+      return;
+    }
+    setSelectedProfile(null);
+    setReportReason('');
+    setReportDetails('');
+  };
+
+  const submitUserReport = async () => {
+    if (!supabase || !selectedProfile || !reportReason.trim()) {
+      return;
+    }
+
+    setSubmittingReport(true);
+
+    const { error } = await supabase.from('reports').insert({
+      reporter_uid: uid,
+      target_type: 'user',
+      target_id: selectedProfile.uid,
+      target_owner_uid: selectedProfile.uid,
+      reason: reportReason.trim(),
+      details: reportDetails.trim(),
+      status: 'open',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+
+    setSubmittingReport(false);
+
+    if (error) {
+      Alert.alert('Unable to submit report', error.message);
+      return;
+    }
+
+    showToast('Report submitted. Admins will review it.', { variant: 'success' });
+    setReportReason('');
+    setReportDetails('');
+  };
+
   return (
     <Screen>
       <View style={styles.container}>
@@ -552,7 +663,10 @@ export function MessagesScreen({ uid }: Props) {
                   <Text style={styles.backGlyph}>{'<'}</Text>
                 </Pressable>
                 {activeConversation ? (
-                  <>
+                  <Pressable
+                    style={styles.chatProfilePressable}
+                    onPress={() => void openUserProfile(activeConversation.buddyId)}
+                  >
                     <View style={styles.avatarCircle}>
                       {activeConversation.avatarUrl ? (
                         <Image
@@ -567,7 +681,7 @@ export function MessagesScreen({ uid }: Props) {
                         {activeConversation.buddyRole || 'mentor'} • Online
                       </Text>
                     </View>
-                  </>
+                  </Pressable>
                 ) : null}
               </View>
 
@@ -690,7 +804,9 @@ export function MessagesScreen({ uid }: Props) {
                         ]}
                       >
                         {msg.senderId !== uid ? (
-                          <Text style={styles.msgSender}>{msg.senderName}</Text>
+                          <Pressable onPress={() => void openUserProfile(msg.senderId)}>
+                            <Text style={styles.msgSender}>{msg.senderName}</Text>
+                          </Pressable>
                         ) : null}
                         <Text
                           style={[
@@ -727,6 +843,82 @@ export function MessagesScreen({ uid }: Props) {
           ) : null}
         </>
       </View>
+
+      <Modal
+        visible={Boolean(selectedProfile) || loadingProfile}
+        transparent
+        animationType="fade"
+        onRequestClose={closeProfileModal}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            {loadingProfile ? (
+              <Text style={styles.modalMeta}>Loading profile...</Text>
+            ) : selectedProfile ? (
+              <>
+                <Text style={styles.modalTitle}>Profile</Text>
+
+                <View style={styles.modalHeaderRow}>
+                  <View style={styles.modalAvatarCircle}>
+                    {selectedProfile.avatarUrl ? (
+                      <Image source={{ uri: selectedProfile.avatarUrl }} style={styles.avatarImage} />
+                    ) : (
+                      <Text style={styles.avatarInitial}>
+                        {(selectedProfile.name || 'U').charAt(0).toUpperCase()}
+                      </Text>
+                    )}
+                  </View>
+                  <View style={styles.modalHeaderTextWrap}>
+                    <Text style={styles.modalName}>{selectedProfile.name || 'User'}</Text>
+                    <Text style={styles.modalMeta}>
+                      {selectedProfile.major || 'No major'} • Year {selectedProfile.yearLevel || 'N/A'}
+                    </Text>
+                  </View>
+                </View>
+
+                <Text style={styles.modalSectionTitle}>Role</Text>
+                <Text style={styles.modalBody}>{selectedProfile.role || 'Member'}</Text>
+
+                <Text style={styles.modalSectionTitle}>Bio</Text>
+                <Text style={styles.modalBody}>{selectedProfile.bio || 'No bio added yet.'}</Text>
+
+                <Text style={styles.modalSectionTitle}>Courses</Text>
+                <Text style={styles.modalBody}>{selectedProfile.courses.join(' • ') || 'No course listed'}</Text>
+
+                <Text style={styles.modalSectionTitle}>Report User</Text>
+                <View style={styles.reportReasonRow}>
+                  {['Harassment', 'Spam', 'Cheating', 'Other'].map((option) => (
+                    <Pressable key={option} onPress={() => setReportReason(option)}>
+                      <Badge text={option} active={reportReason === option} />
+                    </Pressable>
+                  ))}
+                </View>
+                <AppInput
+                  placeholder="Add details (optional)"
+                  value={reportDetails}
+                  onChangeText={setReportDetails}
+                  multiline
+                  style={styles.reportInput}
+                />
+
+                <View style={styles.modalActionsRow}>
+                  <View style={styles.modalActionBtn}>
+                    <AppButton text="Close" variant="outline" onPress={closeProfileModal} disabled={submittingReport} />
+                  </View>
+                  <View style={styles.modalActionBtn}>
+                    <AppButton
+                      text={submittingReport ? 'Submitting...' : 'Report'}
+                      variant="danger"
+                      onPress={() => void submitUserReport()}
+                      disabled={submittingReport || !reportReason.trim()}
+                    />
+                  </View>
+                </View>
+              </>
+            ) : null}
+          </View>
+        </View>
+      </Modal>
     </Screen>
   );
 }
@@ -829,6 +1021,11 @@ const styles = StyleSheet.create({
     marginBottom: 10,
     marginTop: 4,
   },
+  chatProfilePressable: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
   backButton: {
     padding: 6,
     marginRight: 6,
@@ -913,5 +1110,77 @@ const styles = StyleSheet.create({
   },
   sendWrap: {
     minWidth: 90,
+  },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.45)',
+    justifyContent: 'center',
+    padding: 20,
+  },
+  modalCard: {
+    backgroundColor: colors.white,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: 14,
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: colors.textStrong,
+    marginBottom: 8,
+  },
+  modalHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  modalAvatarCircle: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: colors.greenSoft,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 10,
+    overflow: 'hidden',
+  },
+  modalHeaderTextWrap: {
+    flex: 1,
+  },
+  modalName: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: colors.textStrong,
+  },
+  modalMeta: {
+    color: colors.textMuted,
+  },
+  modalSectionTitle: {
+    marginTop: 8,
+    marginBottom: 3,
+    color: colors.textStrong,
+    fontWeight: '700',
+  },
+  modalBody: {
+    color: colors.textBody,
+  },
+  reportReasonRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginTop: 4,
+    marginBottom: 6,
+  },
+  reportInput: {
+    minHeight: 72,
+    textAlignVertical: 'top',
+  },
+  modalActionsRow: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  modalActionBtn: {
+    flex: 1,
   },
 });

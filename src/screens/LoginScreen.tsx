@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Alert, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { isSupabaseConfigured, supabase } from '../lib/supabase';
+import { loginWithGoogle } from '../lib/authService';
 import { AppButton, AppInput, Card, Heading, Screen, Subheading } from '../ui/components';
 import { colors } from '../ui/theme';
 
@@ -37,37 +38,30 @@ export function LoginScreen({ navigation }: Props) {
 
       const { data: meData, error: meError } = await supabase
         .from('users')
-        .select('suspended_until,is_deleted')
+        .select('suspended_until')
         .eq('uid', user.id)
         .maybeSingle();
 
       if (meError) {
-        await supabase.auth.signOut({ scope: 'local' });
-        console.warn('Unable to read timeout/deleted flags during login', meError);
-        Alert.alert('Sign in blocked', 'Unable to verify account status right now. Please try again in a moment.');
-        return;
-      }
-
-      if (!meData) {
+        console.warn('Unable to read suspension flag during login', meError);
+        // Let app-level guards handle status checks to avoid false logout on schema drift/transient errors.
+      } else if (!meData) {
         await supabase.auth.signOut({ scope: 'local' });
         Alert.alert('Account unavailable', 'This account no longer exists. Please contact an admin.');
         return;
-      }
+      } else {
+        const suspendedUntilIso = String((meData as { suspended_until?: unknown } | null)?.suspended_until ?? '');
+        const suspendedUntilTs = Date.parse(suspendedUntilIso);
+        const isTimedOut = Number.isFinite(suspendedUntilTs) && suspendedUntilTs > Date.now();
 
-      const suspendedUntilIso = String((meData as { suspended_until?: unknown } | null)?.suspended_until ?? '');
-      const suspendedUntilTs = Date.parse(suspendedUntilIso);
-      const isTimedOut = Number.isFinite(suspendedUntilTs) && suspendedUntilTs > Date.now();
-      const isDeleted = Boolean((meData as { is_deleted?: unknown } | null)?.is_deleted);
-
-      if (isDeleted || isTimedOut) {
-        await supabase.auth.signOut({ scope: 'local' });
-        Alert.alert(
-          'Account disabled',
-          isDeleted
-            ? 'This account has been disabled by an administrator.'
-            : `Your account is temporarily disabled until ${new Date(suspendedUntilTs).toLocaleString()}.`,
-        );
-        return;
+        if (isTimedOut) {
+          await supabase.auth.signOut({ scope: 'local' });
+          Alert.alert(
+            'Account suspended',
+            `Your account is temporarily suspended until ${new Date(suspendedUntilTs).toLocaleString()}.`,
+          );
+          return;
+        }
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unable to sign in.';
@@ -78,7 +72,20 @@ export function LoginScreen({ navigation }: Props) {
   };
 
   const handleGoogleLogin = async () => {
-    Alert.alert('Not configured', 'Google sign-in is not set up yet in this prototype.');
+    if (!isSupabaseConfigured || !supabase) {
+      Alert.alert('Missing config', 'Set EXPO_PUBLIC_SUPABASE_URL and EXPO_PUBLIC_SUPABASE_ANON_KEY in mobile/.env');
+      return;
+    }
+
+    try {
+      setSubmitting(true);
+      await loginWithGoogle();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unable to sign in with Google.';
+      Alert.alert('Google sign-in failed', message);
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -122,7 +129,7 @@ export function LoginScreen({ navigation }: Props) {
           <View style={styles.divider} />
         </View>
 
-        <AppButton text="Sign in with Google" variant="outline" onPress={handleGoogleLogin} />
+        <AppButton text={submitting ? 'Please wait...' : 'Sign in with Google'} variant="outline" onPress={handleGoogleLogin} disabled={submitting} />
 
         <Pressable onPress={() => navigation.navigate('Register')}>
           <Text style={styles.link}>Don't have an account? Sign up</Text>

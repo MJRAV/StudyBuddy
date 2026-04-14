@@ -3,6 +3,7 @@ import { Alert, Image, Pressable, ScrollView, StyleSheet, Text, View } from 'rea
 import { supabase } from '../lib/supabase';
 import { AppButton, AppInput, Card, Heading, Screen, Subheading } from '../ui/components';
 import { colors } from '../ui/theme';
+import { useToast } from '../ui/toast';
 
 type Buddy = {
   uid: string;
@@ -36,6 +37,7 @@ type GroupChatMessage = {
 type Props = { uid: string };
 
 export function BuddiesScreen({ uid }: Props) {
+  const { showToast } = useToast();
   const [buddies, setBuddies] = useState<Buddy[]>([]);
   const [groups, setGroups] = useState<StudyGroup[]>([]);
   const [hiddenBuddyIds, setHiddenBuddyIds] = useState<string[]>([]);
@@ -267,7 +269,7 @@ export function BuddiesScreen({ uid }: Props) {
       return;
     }
 
-    Alert.alert('Request sent', 'The group owner will review your request.');
+    showToast('Request sent. The group owner will review it.', { variant: 'success' });
 
     setGroups((prev) =>
       prev.map((g) =>
@@ -343,7 +345,7 @@ export function BuddiesScreen({ uid }: Props) {
       return;
     }
 
-    Alert.alert('Request accepted', 'The member has been added to your group.');
+    showToast('Request accepted. Member added to your group.', { variant: 'success' });
 
     setGroups((prev) =>
       prev.map((g) => {
@@ -390,7 +392,7 @@ export function BuddiesScreen({ uid }: Props) {
       return;
     }
 
-    Alert.alert('Request declined', 'The join request has been declined.');
+    showToast('Request declined.', { variant: 'info' });
 
     setGroups((prev) =>
       prev.map((g) => {
@@ -654,7 +656,7 @@ export function BuddiesScreen({ uid }: Props) {
       return;
     }
 
-    Alert.alert('Member removed', 'A member has been removed from this group.');
+    showToast('Member removed from the group.', { variant: 'success' });
 
     setRemoveOptions((prev) => {
       if (!prev || prev.groupId !== groupId) return prev;
