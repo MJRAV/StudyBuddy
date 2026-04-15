@@ -1,4 +1,6 @@
 import { supabase, type UserProfile, getUserProfile as getSlimUserProfile } from './supabase';
+import * as FileSystem from 'expo-file-system/legacy';
+import { decode } from 'base64-arraybuffer';
 
 export type UserProfileRecord = UserProfile & {
   bio: string;
@@ -139,11 +141,16 @@ export async function uploadProfilePicture(uid: string, fileUri: string): Promis
     return '';
   }
 
-  const response = await fetch(fileUri);
-  const blob = await response.blob();
+  const normalizedUri = fileUri.startsWith('file://') || fileUri.startsWith('content://')
+    ? fileUri
+    : `file://${fileUri}`;
+  const base64 = await FileSystem.readAsStringAsync(normalizedUri, {
+    encoding: FileSystem.EncodingType.Base64,
+  });
+  const fileBuffer = decode(base64);
   const path = `${uid}/avatar-${Date.now()}.jpg`;
 
-  const { error } = await supabase.storage.from('avatars').upload(path, blob, {
+  const { error } = await supabase.storage.from('avatars').upload(path, fileBuffer, {
     upsert: true,
     contentType: 'image/jpeg',
   });

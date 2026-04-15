@@ -1,11 +1,11 @@
 {
   "expo": {
     "name": "StudyBuddy",
-    "slug": "studybuddy",
+    "slug": "mobile",
     "scheme": "studybuddy",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
+    "icon": "./assets/logo.png",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
     "splash": {
@@ -18,7 +18,7 @@
     },
     "android": {
       "adaptiveIcon": {
-        "foregroundImage": "./assets/icon.png",
+        "foregroundImage": "./assets/logo.png",
         "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true,
@@ -32,6 +32,10 @@
       "eas": {
         "projectId": "5b13befd-dcf7-43cd-ae1e-0b951f34da6f"
       }
-    }
+    },
+    "plugins": [
+      "expo-font",
+      "expo-web-browser"
+    ]
   }
 }
